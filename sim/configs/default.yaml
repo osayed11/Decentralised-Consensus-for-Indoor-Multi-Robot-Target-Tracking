@@ -1,0 +1,22 @@
+# Baseline: 3 robots, 1 relocating target, no faults, periodic queries.
+name: default
+n_robots: 3
+n_targets: 1
+strategy: independent        # independent | centralized | decentralized
+max_speed: 1.0
+sensor_range: 3.0
+comm_range: 6.0
+sensor_noise_std: 0.3
+use_line_of_sight: false
+relocation_dist: uniform
+relocation_min: 30.0
+relocation_max: 90.0
+query_interval: 60.0
+first_query_at: 30.0
+dispatch_success_radius: 1.0
+dispatch_timeout: 120.0
+dt: 0.1
+time_limit: 300.0
+n_trials: 100
+seed: 0
+output_dir: results

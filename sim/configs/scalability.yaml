@@ -1,0 +1,8 @@
+# Scalability base config; sweep n_robots with --sweep n_robots 2,4,6,8
+name: scalability
+n_robots: 8
+strategy: decentralized
+query_interval: 60.0
+time_limit: 300.0
+n_trials: 30
+seed: 0

@@ -1,0 +1,10 @@
+# Robustness: packet loss + robot 1 fails at t=100 s.
+name: faults
+n_robots: 4
+strategy: decentralized
+packet_loss_prob: 0.3
+robot_failures: {1: 100.0}
+query_interval: 60.0
+time_limit: 300.0
+n_trials: 100
+seed: 0
