@@ -3,7 +3,8 @@ name: default
 n_robots: 3
 n_targets: 1
 strategy: independent        # independent | centralized | decentralized
-max_speed: 1.0
+max_speed: 0.6
+max_accel: 0.8
 sensor_range: 3.0
 comm_range: 6.0
 sensor_noise_std: 0.3

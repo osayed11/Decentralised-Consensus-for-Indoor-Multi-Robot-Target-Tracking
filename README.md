@@ -10,7 +10,7 @@ the research team's contribution.
 | Module | Status | Contents |
 |---|---|---|
 | `sim/environment.py` | complete | floor plan (default house/office, or from 2D array / image / .npy / .txt), occupancy grid, inflation, free-space sampling, Bresenham line-of-sight |
-| `sim/robot.py` | complete | holonomic point-mass (default) or diff-drive kinematics, waypoint following, range + Gaussian-noise sensor (optional LOS), `Belief` container |
+| `sim/robot.py` | complete | holonomic point-mass (default, with acceleration limit and corner lookahead) or diff-drive kinematics, waypoint following, range + Gaussian-noise sensor (optional LOS), `Belief` container |
 | `sim/target.py` | complete | random relocation (uniform / exponential / fixed / none), `pause_relocation()` / `resume_relocation()` |
 | `sim/planning.py` | complete | A* on the inflated grid, 8-connected, string-pulled waypoints |
 | `sim/faults.py` | complete | scheduled robot failure (stops sensing / moving / communicating) |
@@ -29,7 +29,7 @@ Nothing outside those three places needs to change to drop in real algorithms.
 ```bash
 pip install numpy matplotlib networkx pandas pyyaml   # pillow or ffmpeg for animation export
 python run_experiments.py --config sim/configs/default.yaml --trials 10
-python demo.py --duration 120                          # live animation
+python demo.py --duration 120                          # live animation (2x real time; --speed 1 for real time)
 python demo.py --save results/demo.gif --duration 60   # export
 ```
 
@@ -79,7 +79,7 @@ plt.show()
 ## Config keys
 
 See `SimConfig` in `sim/harness.py`; every field can be set from YAML/JSON.
-Key ones: `n_robots`, `n_targets`, `strategy`, `strategy_kwargs`, `sensor_range`,
+Key ones: `n_robots`, `n_targets`, `strategy`, `strategy_kwargs`, `max_speed`, `max_accel`, `sensor_range`,
 `comm_range`, `sensor_noise_std`, `use_line_of_sight`, `kinematics`
 (`holonomic` | `diffdrive`), `relocation_dist/min/max/mean`, `packet_loss_prob`,
 `robot_failures` (`{robot_id: t}`), `query_times` / `query_interval`,

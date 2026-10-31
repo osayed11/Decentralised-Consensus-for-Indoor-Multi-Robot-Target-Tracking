@@ -74,10 +74,12 @@ def draw_frame(sim: Simulation, ax: Optional[plt.Axes] = None, show_comm: bool =
     return ax
 
 
-def animate(sim: Simulation, duration: Optional[float] = None, steps_per_frame: int = 5, fps: int = 10,
+def animate(sim: Simulation, duration: Optional[float] = None, steps_per_frame: int = 1, fps: int = 20,
             save_path: Optional[str] = None, show: bool = True, **draw_kw):
     """Run the simulation while rendering. If ``save_path`` ends in .mp4 or
-    .gif the animation is written to disk (ffmpeg / pillow required)."""
+    .gif the animation is written to disk (ffmpeg / pillow required).
+
+    Playback speed = steps_per_frame * dt * fps  (defaults: 1 * 0.1 * 20 = 2x real time)."""
     from matplotlib.animation import FuncAnimation
 
     duration = sim.cfg.time_limit if duration is None else duration

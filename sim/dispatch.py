@@ -35,6 +35,18 @@ def select_robot_for_dispatch(robots: List[Robot], beliefs: Dict[int, Dict[int, 
     return min(alive, key=lambda r: np.linalg.norm(r.position - target.position)).id
 
 
+def _brake(robot: Robot, stop_dist: float = 0.35) -> None:
+    """Replace the robot's path with a short stop point along its current
+    segment so it decelerates smoothly instead of halting instantly."""
+    if robot.failed or not robot.path:
+        robot.path = []
+        return
+    wp = robot.path[0]
+    seg = wp - robot.position
+    d = float(np.linalg.norm(seg))
+    robot.path = [wp] if d <= stop_dist else [robot.position + seg / d * stop_dist]
+
+
 @dataclass
 class DispatchResult:
     query_id: int
@@ -146,6 +158,6 @@ class Dispatcher:
         res.t_end, res.success, res.reason = t, success, reason
         res.distance_travelled = ad.robot.distance_travelled - ad.start_distance
         ad.robot.mode = "patrol" if not ad.robot.failed else "idle"
-        ad.robot.path = []
+        _brake(ad.robot)
         ad.target.resume_relocation()
         del self.active[ad.target.id]

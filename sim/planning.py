@@ -77,12 +77,11 @@ def _simplify(env: Environment, pts: List[np.ndarray]) -> List[np.ndarray]:
     the inflated grid."""
     if len(pts) <= 2:
         return pts
-    inflated_env = Environment(grid=env.inflated, resolution=env.resolution, robot_radius=0.0)
     out = [pts[0]]
     i = 0
     while i < len(pts) - 1:
         j = len(pts) - 1
-        while j > i + 1 and not inflated_env.line_of_sight(pts[i], pts[j]):
+        while j > i + 1 and not env.line_of_sight(pts[i], pts[j], inflated=True):
             j -= 1
         out.append(pts[j])
         i = j
@@ -104,8 +103,14 @@ def plan_path(start: Point, goal: Point, env: Environment, simplify: bool = True
     if cells is None:
         return []
     pts = [np.asarray(start, dtype=float)] + [env.grid_to_world(c) for c in cells[1:]]
-    if env.is_free(goal):
-        pts[-1] = np.asarray(goal, dtype=float)
+    goal_arr = np.asarray(goal, dtype=float)
+    if env.is_free(goal) and env.line_of_sight(pts[-1], goal_arr, inflated=True):
+        if len(pts) > 1:
+            pts[-1] = goal_arr
+        else:
+            pts.append(goal_arr)
+    elif len(pts) == 1:
+        pts.append(env.grid_to_world(cells[-1]))
     if simplify:
         pts = _simplify(env, pts)
     return pts[1:]

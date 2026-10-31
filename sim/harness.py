@@ -32,7 +32,8 @@ class SimConfig:
     robot_radius: float = 0.3
     # robots
     n_robots: int = 3
-    max_speed: float = 1.0
+    max_speed: float = 0.6
+    max_accel: float = 0.8
     sensor_range: float = 3.0
     comm_range: float = 6.0
     sensor_noise_std: float = 0.3
@@ -137,7 +138,8 @@ class Simulation:
             pos = self.env.random_free_position(self.rng, min_dist_from=[r.position for r in self.robots],
                                                 min_dist=2 * cfg.robot_radius + 0.2)
             self.robots.append(Robot(id=i, position=pos, heading=self.rng.uniform(-np.pi, np.pi),
-                                     max_speed=cfg.max_speed, sensor_range=cfg.sensor_range,
+                                     max_speed=cfg.max_speed, max_accel=cfg.max_accel,
+                                     sensor_range=cfg.sensor_range,
                                      comm_range=cfg.comm_range, sensor_noise_std=cfg.sensor_noise_std,
                                      kinematics=cfg.kinematics))
 

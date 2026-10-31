@@ -21,6 +21,8 @@ def main() -> None:
     ap.add_argument("--save", default=None, help=".gif or .mp4 path")
     ap.add_argument("--frames", default=None, help="directory for PNG frames")
     ap.add_argument("--paths", action="store_true", help="draw planned paths")
+    ap.add_argument("--speed", type=float, default=2.0, help="playback speed relative to real time")
+    ap.add_argument("--fps", type=int, default=20)
     args = ap.parse_args()
 
     cfg = SimConfig.from_file(args.config)
@@ -31,7 +33,9 @@ def main() -> None:
         paths = export_frames(sim, args.frames, every_s=1.0, duration=args.duration, show_paths=args.paths)
         print(f"wrote {len(paths)} frames to {args.frames}")
     else:
-        animate(sim, duration=args.duration, save_path=args.save, show=args.save is None, show_paths=args.paths)
+        spf = max(1, int(round(args.speed / (cfg.dt * args.fps))))
+        animate(sim, duration=args.duration, steps_per_frame=spf, fps=args.fps, save_path=args.save,
+                show=args.save is None, show_paths=args.paths)
 
 
 if __name__ == "__main__":
