@@ -16,9 +16,10 @@ the research team's contribution.
 | `sim/faults.py` | complete | scheduled robot failure (stops sensing / moving / communicating) |
 | `sim/dispatch.py` | complete (pipeline) | `query_target()` → select robot → pause relocation → plan to belief → drive → success / failure + logging |
 | `sim/harness.py` | complete | `SimConfig` (YAML/JSON/dataclass), `Simulation` step loop, `run_trials`, `run_sweep`, CSV logs, mean/std/95% CI aggregation |
+| `sim/estimator.py`, `sim/messages.py` | complete | shared Kalman filter with innovation gating and belief reset; agreed message formats |
 | `sim/visualize.py` | complete | 2D view (robots, sensor circles, true target, beliefs + covariance ellipses, comm edges), animation / frame export, result plots |
-| **`sim/strategies.py`** | **STUB** | `CoordinationStrategy` interface + `IndependentStrategy`, `CentralizedStrategy`, `DecentralizedConsensusStrategy`. Placeholder: belief = last raw observation, no relocation detection, no messages |
-| **`sim/comms.py`** | **STUB** | `CommunicationLayer` interface: `build_graph`, `send_message`, `broadcast`, message log / cost metrics. Placeholder: graph has no edges, messages are dropped |
+| **`sim/strategies.py`** | **partly done** | All three strategies run the shared estimator (`sim/estimator.py`); `independent` is complete. **TODO**: centralized fusion at the hub, decentralized consensus update (messages are already broadcast). See `SHARED_COMPONENTS.md` |
+| `sim/comms.py` | complete | range-based graph, packet loss (own random stream), delivery to `robot.inbox`, per-message log and cost metrics. See `SHARED_COMPONENTS.md` |
 | **`sim/dispatch.py::select_robot_for_dispatch`** | **STUB** | Placeholder: nearest alive robot by *true* distance (cheats on purpose so the pipeline runs) |
 
 Everything marked `TODO (research team)` in the source is yours to replace.
@@ -27,7 +28,8 @@ Nothing outside those three places needs to change to drop in real algorithms.
 ## Install / run
 
 ```bash
-pip install numpy matplotlib networkx pandas pyyaml   # pillow or ffmpeg for animation export
+pip install numpy matplotlib networkx pandas pyyaml pytest   # pillow or ffmpeg for animation export
+pytest -q tests                                              # shared components
 python run_experiments.py --config sim/configs/default.yaml --trials 10
 python demo.py --duration 120                          # live animation (2x real time; --speed 1 for real time)
 python demo.py --save results/demo.gif --duration 60   # export

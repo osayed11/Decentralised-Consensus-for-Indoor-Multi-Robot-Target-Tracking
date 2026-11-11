@@ -1,19 +1,16 @@
 """Coordination strategies.
 
-############################################################################
-#  RESEARCH TEAM CONTRIBUTION -- STUBS ONLY.                               #
-#                                                                          #
-#  Each timestep the simulation, for every alive robot, calls:             #
-#     1. msgs = robot.inbox (delivered since last step; cleared after)     #
-#     2. for each target: belief = strategy.update_belief(robot, target_id,#
-#            observation, msgs, t)                                         #
-#     3. strategy.detect_relocation(robot, target_id, observation, belief) #
-#     4. strategy.get_messages_to_send(robot, comm_layer, robots, t)       #
-#        -> list of (receiver_id | None for broadcast, payload dict)       #
-#                                                                          #
-#  Placeholders implement "belief = most recent raw observation", never    #
-#  flag a relocation, and send nothing.                                    #
-############################################################################
+Each timestep the simulation, for every alive robot, calls:
+   1. msgs = robot.inbox (delivered since last step; cleared after)
+   2. for each target: belief = strategy.update_belief(robot, target_id,
+          observation, msgs, t)
+   3. strategy.detect_relocation(robot, target_id, observation, belief)
+   4. strategy.get_messages_to_send(robot, comm_layer, robots, t)
+      -> list of (receiver_id | None for broadcast, payload dict)
+
+All three strategies share the per-robot estimator in ``sim/estimator.py``
+(Kalman filter, innovation gating, belief reset) and the message formats in
+``sim/messages.py``.  What is still TODO is marked per class below.
 """
 from __future__ import annotations
 
@@ -22,6 +19,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .comms import CommunicationLayer
+from .estimator import Estimator, EstimatorConfig, chi2_threshold
+from .messages import belief_message
 from .robot import Belief, Robot
 
 Message = Tuple[Optional[int], Dict[str, Any]]  # (receiver_id or None=broadcast, payload)
@@ -56,42 +55,65 @@ class CoordinationStrategy:
 
 
 # ---------------------------------------------------------------------------
-# Trivial placeholder shared by the three stubs so the pipeline runs.
+# Shared base: every strategy runs the same per-robot estimator (sim/estimator.py)
+# on its own observations.  The strategies differ only in what they send and how
+# they fuse what they receive -- the parts still marked TODO below.
 # ---------------------------------------------------------------------------
-class _LastObservationStub(CoordinationStrategy):
+class _SharedEstimatorBase(CoordinationStrategy):
+    """Per-robot Kalman filter with innovation gating and belief reset.
+
+    ``strategy_kwargs`` in the config are passed here, e.g.
+    ``{gate_prob: 0.99, process_noise: 0.01, confirm: 1}`` (``gate`` sets the
+    chi-square threshold directly and overrides ``gate_prob``)."""
+
+    def __init__(self, gate: Optional[float] = None, gate_prob: float = 0.99,
+                 process_noise: float = 0.01, confirm: int = 1):
+        self.config = EstimatorConfig(process_noise=process_noise,
+                                      gate=gate if gate is not None else chi2_threshold(gate_prob),
+                                      confirm=confirm)
+
+    def reset(self, robots, rng):
+        super().reset(robots, rng)
+        self.estimator = Estimator(self.config)
+
     def update_belief(self, robot, target_id, observation, neighbor_messages, t):
-        # TODO (research team): replace with real fusion logic.
         prev = robot.beliefs.get(target_id, Belief())
-        if observation is not None:
-            return Belief(mean=np.asarray(observation, dtype=float),
-                          cov=np.eye(2) * robot.sensor_noise_std ** 2,
-                          timestamp=t, source="own_obs")
-        return prev
+        return self.estimator.update(robot.id, target_id, prev, observation, robot.sensor_noise_std, t)
 
     def detect_relocation(self, robot, target_id, observation, belief):
-        # TODO (research team): innovation gating.
-        return False
+        return self.estimator.relocation_detected(robot.id, target_id)
 
     def get_messages_to_send(self, robot, comm, robots, t):
-        # TODO (research team).
         return []
 
 
-class IndependentStrategy(_LastObservationStub):
-    """Each robot tracks on its own; no communication.  STUB."""
+class IndependentStrategy(_SharedEstimatorBase):
+    """Each robot tracks on its own; no communication.  Complete as it is."""
     name = "independent"
 
 
-class CentralizedStrategy(_LastObservationStub):
+class CentralizedStrategy(_SharedEstimatorBase):
     """All observations are sent to a hub (e.g. robot 0) which fuses them and
-    returns the fused estimate.  STUB."""
+    returns the fused estimate.
+    TODO (research team): send ``messages.observation_message`` to the hub, fuse at
+    the hub with ``self.estimator``, broadcast ``messages.belief_message`` back."""
     name = "centralized"
     hub_id = 0
 
 
-class DecentralizedConsensusStrategy(_LastObservationStub):
-    """Neighbours exchange estimates and run a consensus update.  STUB."""
+class DecentralizedConsensusStrategy(_SharedEstimatorBase):
+    """Neighbours exchange estimates and run a consensus update.
+
+    Messaging is in place: every robot broadcasts its belief about every target to
+    its graph neighbours each step (``messages.belief_message``).
+    TODO (research team): the consensus update in ``update_belief`` -- use
+    ``messages.for_target(neighbor_messages, target_id)``, ``messages.is_newer``
+    and the estimator's gating to decide between fusing and resetting."""
     name = "decentralized"
+
+    def get_messages_to_send(self, robot, comm, robots, t):
+        return [(None, belief_message(robot.id, target_id, belief, t))
+                for target_id, belief in robot.beliefs.items() if belief.valid and belief.cov is not None]
 
 
 STRATEGIES = {

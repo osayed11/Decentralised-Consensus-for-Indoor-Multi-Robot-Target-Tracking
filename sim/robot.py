@@ -14,13 +14,15 @@ from .target import Target
 
 @dataclass
 class Belief:
-    """Position estimate for one target. ``cov`` may be None if the strategy
-    does not track uncertainty."""
+    """Position estimate for one target (the team-agreed belief, see SHARED_COMPONENTS.md).
+    ``cov`` may be None if the strategy does not track uncertainty."""
 
     mean: Optional[np.ndarray] = None
     cov: Optional[np.ndarray] = None
-    timestamp: float = -np.inf
-    source: str = "none"  # free-form tag, e.g. "own_obs", "fused", "msg"
+    timestamp: float = -np.inf      # last time the belief was predicted/updated
+    source: str = "none"            # free-form tag, e.g. "own_obs", "fused", "msg"
+    last_seen: float = -np.inf      # time of the latest real observation behind this belief
+    reset_count: int = 0            # relocation resets so far (local counter, diagnostics)
 
     @property
     def valid(self) -> bool:
