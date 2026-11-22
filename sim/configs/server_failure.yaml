@@ -1,0 +1,12 @@
+# Unexpected central-server failure (only matters for the centralised strategy;
+# the other strategies have no server).  Robots keep their own estimator.
+# Fixed-time alternative for a controlled run:  coordinator_failure_time: 150.0
+name: server_failure
+n_robots: 3
+strategy: centralized
+coordinator_failure_prob: 0.5
+coordinator_downtime: null      # null = permanent
+query_interval: 60.0
+time_limit: 300.0
+n_trials: 100
+seed: 0

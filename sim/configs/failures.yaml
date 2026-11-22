@@ -1,0 +1,13 @@
+# Unexpected robot failures: each robot has a 30% chance of failing at a
+# random moment (constant risk) during the trial; failures are permanent.
+# Sweep the probability with:  --sweep robot_failure_prob 0,0.2,0.4,0.6
+name: failures
+n_robots: 4
+strategy: decentralized
+robot_failure_prob: 0.3
+robot_downtime: null            # null = permanent; e.g. 20.0 for a 20 s outage
+keep_belief_on_recovery: true   # false = a reboot wipes the robot's beliefs
+query_interval: 60.0
+time_limit: 300.0
+n_trials: 100
+seed: 0

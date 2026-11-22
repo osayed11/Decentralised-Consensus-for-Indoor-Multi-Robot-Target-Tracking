@@ -31,8 +31,13 @@ def run(strategy, **overrides):
     return sim
 
 
+# A sensor range covering the whole map guarantees beliefs exist, so these tests
+# do not depend on whether a given seed's patrol happens to find the target.
+SEES_ALL = dict(sensor_range=30.0)
+
+
 def test_decentralized_messages_flow_and_independent_stays_silent():
-    dec, ind = run("decentralized"), run("independent")
+    dec, ind = run("decentralized", **SEES_ALL), run("independent", **SEES_ALL)
     assert dec.comm.messages_delivered() > 0
     assert ind.comm.messages_sent() == 0
 
@@ -49,6 +54,6 @@ def test_every_strategy_sees_the_same_world():
 
 
 def test_failed_robot_stops_communicating():
-    sim = run("decentralized", robot_failures={1: 10.0})
+    sim = run("decentralized", robot_failures={1: 10.0}, **SEES_ALL)
     late = [m for m in sim.comm.log if m.t > 10.0]
     assert late and not any(m.delivered and 1 in (m.sender, m.receiver) for m in late)

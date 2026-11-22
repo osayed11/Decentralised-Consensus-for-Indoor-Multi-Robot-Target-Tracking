@@ -146,8 +146,28 @@ def update_belief(self, robot, target_id, observation, neighbor_messages, t):
 * **D4** Decentralized robots broadcast every step (10 Hz, ~8,600 messages per 300 s trial with 3
   robots). A lower rate (e.g. 1 Hz) is a cheap parameter if communication cost matters.
 * **D5** Defaults `gate_prob 0.99, process_noise 0.01, confirm 1`.
-* **D6** Centralized hub: robot 0 over the same radio graph (hub out of range → no fusion), or an
-  infrastructure link that always works?
+* **D6 — DECIDED (2026-11-22): off-board coordinator (base station).** Every alive robot can always
+  reach it, regardless of comm range; the same `packet_loss_prob` applies in both directions. It stays
+  up by default (robot failures only remove that robot's sightings), but **can fail via a scheduled
+  fault** (`coordinator_failure_time`, default off): from then on it neither receives nor broadcasts, and
+  centralised robots fall back to their local estimator (independent-like). Server failure is a
+  separate robustness scenario, not part of the fault-free / packet-loss / robot-failure runs. Uplink and downlink messages both count
+  toward communication cost. Report framing: the centralised baseline assumes building-wide
+  infrastructure and is the upper bound; the decentralised method uses only short-range links.
+  **Built:** `comms.send_to_coordinator` (robot -> server), `comms.coordinator_broadcast` (server ->
+  all alive robots), receiver id `comms.COORDINATOR` in `get_messages_to_send`, and the strategy hook
+  `coordinator_step(inbox, comm, robots, t)` that runs on the server each step. A robot-0 hub may be
+  added later as an optional "realistic centralised" variant.
+* **Failures — DECIDED (2026-11-22): unexpected failures.** Per-robot and per-server probability of
+  failing during the trial, constant risk; permanent by default, optional downtime (a returning robot
+  keeps its stale belief unless `keep_belief_on_recovery: false`); fixed-time failures kept for
+  controlled runs. Failure times are drawn up front from their own random stream, and targets / each
+  robot's patrol and sensing have separate streams too, so failures never change the rest of the
+  world. Impact is measured around each failure (10 s before vs 30 s after, recovery time) rather than
+  only over the whole trial. See `sim/faults.py`, README "Failures".
+* **Metric — DECIDED (2026-11-22): accuracy is the mean over alive robots** (no belief = building
+  centre, failed robots excluded); search efficiency = first time every alive robot is within 1 m.
+  Implemented in `sim/metrics.py`, see README "Metrics".
 
 ## 9. Files changed
 `sim/comms.py`, `sim/robot.py` (Belief fields), `sim/strategies.py` (shared base, decentralized

@@ -15,6 +15,15 @@ Every step the simulation calls ``build_graph``; strategies then send with
 * Every attempt is logged as a ``MessageRecord`` (delivered or not, and why)
   for the communication-cost and robustness metrics.
 
+* Coordinator link (decision D6): an off-board central server that every
+  alive robot can always reach, whatever the distance.  The same packet loss
+  applies in both directions.  It can fail (``set_coordinator_up``, driven by
+  ``FaultSchedule``): while down it neither receives nor broadcasts.  Robots
+  send with ``send_to_coordinator``; the strategy's ``coordinator_step`` reads
+  ``coordinator_inbox`` and its replies go out with ``coordinator_broadcast``.
+  Coordinator traffic is logged with sender/receiver id ``COORDINATOR`` (-1)
+  and counts toward communication cost like any other message.
+
 Payload formats are defined in ``sim/messages.py``.
 """
 from __future__ import annotations
@@ -27,6 +36,8 @@ import networkx as nx
 import numpy as np
 
 from .robot import Robot
+
+COORDINATOR = -1  # id of the off-board coordinator in logs and as a message receiver
 
 
 @dataclass
@@ -45,6 +56,8 @@ class CommunicationLayer:
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
     graph: nx.Graph = field(default_factory=nx.Graph)
     log: List[MessageRecord] = field(default_factory=list)
+    coordinator_up: bool = True
+    coordinator_inbox: List[Dict[str, Any]] = field(default_factory=list)
     _t: float = 0.0
 
     def __post_init__(self) -> None:
@@ -89,6 +102,48 @@ class CommunicationLayer:
         """Send to every current graph neighbour of ``sender``.  Returns deliveries."""
         by_id = {r.id: r for r in robots}
         return sum(int(self.send_message(sender, by_id[nid], payload)) for nid in self.neighbors(sender.id))
+
+    # -- coordinator link --------------------------------------------------
+    def set_coordinator_up(self, up: bool) -> None:
+        self.coordinator_up = up
+        if not up:
+            self.coordinator_inbox = []   # whatever was queued is lost with the server
+
+    def send_to_coordinator(self, sender: Robot, payload: Dict[str, Any]) -> bool:
+        """Robot -> server.  Always in range; lost with ``packet_loss_prob``; not
+        received while the server is down (the robot cannot tell, so the
+        attempt is still logged and counted)."""
+        size = _payload_size(payload)
+        if sender.failed:
+            self.log.append(MessageRecord(self._t, sender.id, COORDINATOR, size, False, "no_link"))
+            return False
+        if not self.coordinator_up:
+            self.log.append(MessageRecord(self._t, sender.id, COORDINATOR, size, False, "coordinator_down"))
+            return False
+        if self.packet_loss_prob > 0 and self.rng.random() < self.packet_loss_prob:
+            self.log.append(MessageRecord(self._t, sender.id, COORDINATOR, size, False, "lost"))
+            return False
+        self.coordinator_inbox.append(copy.deepcopy(payload))
+        self.log.append(MessageRecord(self._t, sender.id, COORDINATOR, size, True, "delivered"))
+        return True
+
+    def coordinator_broadcast(self, robots: List[Robot], payload: Dict[str, Any]) -> int:
+        """Server -> every alive robot, each copy lost independently.  A server
+        that is down sends nothing.  Returns deliveries."""
+        if not self.coordinator_up:
+            return 0
+        size = _payload_size(payload)
+        delivered = 0
+        for r in robots:
+            if r.failed:
+                continue
+            if self.packet_loss_prob > 0 and self.rng.random() < self.packet_loss_prob:
+                self.log.append(MessageRecord(self._t, COORDINATOR, r.id, size, False, "lost"))
+                continue
+            r.inbox.append(copy.deepcopy(payload))
+            self.log.append(MessageRecord(self._t, COORDINATOR, r.id, size, True, "delivered"))
+            delivered += 1
+        return delivered
 
     # -- metrics -----------------------------------------------------------
     def messages_sent(self) -> int:

@@ -154,6 +154,16 @@ class Environment:
         g = self.inflated if inflated else self.grid
         return not g[r, c]
 
+    @property
+    def centre(self) -> np.ndarray:
+        """Centroid of the reachable free space: the guess a robot with no
+        information about the target would sensibly make.  Used by the
+        accuracy metrics for robots that have no belief yet."""
+        if not hasattr(self, "_centre"):
+            rr, cc = np.nonzero(self.reachable)
+            self._centre = np.array([(cc.mean() + 0.5) * self.resolution, (rr.mean() + 0.5) * self.resolution])
+        return self._centre
+
     def is_reachable(self, p: Point) -> bool:
         """Free and inside the largest connected free region."""
         if not self.in_bounds(p):

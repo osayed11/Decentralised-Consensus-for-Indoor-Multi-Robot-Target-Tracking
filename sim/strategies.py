@@ -18,12 +18,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .comms import CommunicationLayer
+from .comms import COORDINATOR, CommunicationLayer
 from .estimator import Estimator, EstimatorConfig, chi2_threshold
 from .messages import belief_message
 from .robot import Belief, Robot
 
-Message = Tuple[Optional[int], Dict[str, Any]]  # (receiver_id or None=broadcast, payload)
+Message = Tuple[Optional[int], Dict[str, Any]]  # (receiver_id, None=broadcast, or COORDINATOR; payload)
 
 
 class CoordinationStrategy:
@@ -52,6 +52,14 @@ class CoordinationStrategy:
         """Returns messages this robot sends this timestep.
         TO BE IMPLEMENTED."""
         raise NotImplementedError
+
+    def coordinator_step(self, inbox: List[dict], comm: CommunicationLayer, robots: List[Robot],
+                         t: float) -> List[dict]:
+        """Runs on the off-board coordinator once per step while it is up, after
+        the robots have sent.  ``inbox`` holds what reached it this step.
+        Returns payloads to broadcast to every alive robot (they arrive next
+        step).  Only the centralised strategy uses it; default: do nothing."""
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +101,19 @@ class IndependentStrategy(_SharedEstimatorBase):
 
 
 class CentralizedStrategy(_SharedEstimatorBase):
-    """All observations are sent to a hub (e.g. robot 0) which fuses them and
-    returns the fused estimate.
-    TODO (research team): send ``messages.observation_message`` to the hub, fuse at
-    the hub with ``self.estimator``, broadcast ``messages.belief_message`` back."""
+    """All observations are sent to an off-board coordinator (base station) which
+    fuses them and returns the fused estimate.  Decision D6: every alive robot can
+    always reach the coordinator and the same packet loss applies.  It can fail via a
+    scheduled fault (coordinator_failure_time, default off); robots then fall back to
+    their local estimator.
+    TODO (research team): in ``get_messages_to_send`` return
+    ``(COORDINATOR, messages.observation_message(...))``; in ``coordinator_step`` fuse
+    the inbox with ``self.estimator`` (use ``COORDINATOR`` as its robot id) and return
+    ``messages.belief_message(COORDINATOR, ...)`` payloads; in ``update_belief`` adopt
+    the coordinator's belief messages.  If the server is down nothing arrives, so the
+    robots keep their own estimator (the intended fallback)."""
     name = "centralized"
-    hub_id = 0
+    # (hub_id removed: the coordinator is off-board, not a robot -- decision D6)
 
 
 class DecentralizedConsensusStrategy(_SharedEstimatorBase):

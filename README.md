@@ -13,7 +13,7 @@ the research team's contribution.
 | `sim/robot.py` | complete | holonomic point-mass (default, with acceleration limit and corner lookahead) or diff-drive kinematics, waypoint following, range + Gaussian-noise sensor (optional LOS), `Belief` container |
 | `sim/target.py` | complete | random relocation (uniform / exponential / fixed / none), `pause_relocation()` / `resume_relocation()` |
 | `sim/planning.py` | complete | A* on the inflated grid, 8-connected, string-pulled waypoints |
-| `sim/faults.py` | complete | scheduled robot failure (stops sensing / moving / communicating) |
+| `sim/faults.py` | complete | unexpected robot and central-server failures: constant-risk probability or fixed time, permanent or temporary (see Failures) |
 | `sim/dispatch.py` | complete (pipeline) | `query_target()` → select robot → pause relocation → plan to belief → drive → success / failure + logging |
 | `sim/harness.py` | complete | `SimConfig` (YAML/JSON/dataclass), `Simulation` step loop, `run_trials`, `run_sweep`, CSV logs, mean/std/95% CI aggregation |
 | `sim/estimator.py`, `sim/messages.py` | complete | shared Kalman filter with innovation gating and belief reset; agreed message formats |
@@ -60,11 +60,45 @@ python run_experiments.py --config sim/configs/default.yaml --sweep strategy ind
 * `trial_XXX_steps.csv` — per (t, target, robot): true pos, robot pos, belief, error, observed flag, cumulative messages
 * `trial_XXX_events.csv` — relocations, relocation detections, queries, dispatch outcomes, robot failures
 * `trial_XXX_dispatch.csv` — one row per query: robot, start/end time, success, reason, belief error at dispatch, distance
-* `trials.csv` — one row per trial: `rmse_team`, `frac_time_localised`, `time_to_first_localisation`, `messages_sent`, `bytes_sent`, `dispatch_success_rate`, `dispatch_time_mean`, …
+* `trials.csv` — one row per trial: `rmse_mean`, `frac_robots_localised`, `rmse_worst`, `rmse_best`, `time_all_localised`, `search_success_all`, `time_any_localised`, `messages_sent`, `bytes_sent`, `dispatch_success_rate`, `dispatch_time_mean`, …
 * `summary.csv` — mean / std / 95% CI / n per metric
 * `config.json`
 
-"Team" error = min over robots of belief error at each time (best-informed robot).
+## Failures (`sim/faults.py`)
+
+Failures are *unexpected*: each robot fails during a trial with probability
+`robot_failure_prob`, at a moment drawn with constant risk (nothing hints that
+it is coming). The central server has its own `coordinator_failure_prob`
+(only the centralised strategy uses a server). Failures are permanent unless
+`robot_downtime` / `coordinator_downtime` is set; a returning robot keeps its
+stale beliefs unless `keep_belief_on_recovery: false`. Fixed-time failures
+(`robot_failures: {1: 100.0}`, `coordinator_failure_time`) override the draw,
+for controlled scenarios. All failure times are drawn at the start of the
+trial from their own random stream, and targets, each robot's patrol and each
+robot's sensor noise also have their own streams, so the same seed gives the
+same failures for every strategy and a faulty run differs from its fault-free
+twin only by the failure itself. Example configs: `failures.yaml`, `server_failure.yaml`.
+
+## Metrics (accuracy and search efficiency, `sim/metrics.py`)
+
+Each alive robot's own belief is scored against the true target position.
+A robot with no belief yet counts as guessing the centre of the building; a
+failed robot is excluded from the moment it fails. Per time step:
+
+| metric | meaning | role |
+|---|---|---|
+| `rmse_mean` | RMSE over alive robots and time | headline accuracy |
+| `frac_robots_localised` | average share of robots within `localised_threshold` (1 m) | companion |
+| `rmse_worst` | RMSE of the worst robot each step | robustness view |
+| `rmse_best` | RMSE of the best robot each step | "does anyone know" |
+| `time_all_localised` / `search_success_all` | first time every alive robot is within 1 m | headline search efficiency |
+| `time_any_localised` / `search_success_any` | first time any robot is within 1 m | secondary |
+| `robot_failure_err_before` / `_after` / `_increase` | survivors' mean error in the 10 s before vs 30 s after each robot failure | failure impact |
+| `robot_failure_recovery_time` / `_recovered` | time until survivors' error is back at the pre-failure level (share that recovered) | failure impact |
+| `coordinator_failure_*` | the same around a server failure, over all alive robots | failure impact |
+
+The step logs keep the raw `error` (NaN without a belief) and add `error_eval`
+(the value the metrics use) and `has_belief`.
 
 ## Plotting
 
@@ -73,8 +107,8 @@ import pandas as pd, matplotlib.pyplot as plt
 from sim.visualize import plot_error_over_time, plot_rmse_over_time, plot_metric_bars, plot_degradation
 plot_error_over_time(pd.read_csv("results/default/trial_000_steps.csv"), events_df=pd.read_csv("results/default/trial_000_events.csv"))
 plot_rmse_over_time("results/default")
-plot_metric_bars(pd.read_csv("results/default/sweep_strategy.csv"), "time_to_first_localisation", group="sweep_value")
-plot_degradation(pd.read_csv("results/faults/sweep_packet_loss_prob.csv"), "rmse_team", hue=None)
+plot_metric_bars(pd.read_csv("results/default/sweep_strategy.csv"), "time_all_localised", group="sweep_value")
+plot_degradation(pd.read_csv("results/faults/sweep_packet_loss_prob.csv"), "rmse_mean", hue=None)
 plt.show()
 ```
 
@@ -82,7 +116,7 @@ plt.show()
 
 See `SimConfig` in `sim/harness.py`; every field can be set from YAML/JSON.
 Key ones: `n_robots`, `n_targets`, `strategy`, `strategy_kwargs`, `max_speed`, `max_accel`, `sensor_range`,
-`comm_range`, `sensor_noise_std`, `use_line_of_sight`, `kinematics`
+`comm_range`, `sensor_noise_std`, `use_line_of_sight`, `kinematics`, `robot_failure_prob`, `robot_downtime`, `keep_belief_on_recovery`, `coordinator_failure_prob`, `coordinator_failure_time`, `coordinator_downtime`,
 (`holonomic` | `diffdrive`), `relocation_dist/min/max/mean`, `packet_loss_prob`,
 `robot_failures` (`{robot_id: t}`), `query_times` / `query_interval`,
 `dispatch_success_radius`, `dispatch_timeout`, `dt`, `time_limit`, `n_trials`, `seed`.

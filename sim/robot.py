@@ -175,3 +175,16 @@ class Robot:
         self.path = []
         self.velocity = np.zeros(2)
         self.mode = "idle"
+
+    def recover(self, t: float, keep_belief: bool = True) -> None:
+        """Come back after a temporary outage.  With ``keep_belief`` the robot
+        still holds its pre-failure (now stale) beliefs; otherwise it rebooted
+        and knows nothing."""
+        self.failed = False
+        self.mode = "patrol"
+        self.path = []
+        self.velocity = np.zeros(2)
+        self.inbox = []
+        self.last_observations = {}
+        if not keep_belief:
+            self.beliefs = {}

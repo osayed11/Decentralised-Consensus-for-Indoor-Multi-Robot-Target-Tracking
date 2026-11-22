@@ -11,6 +11,7 @@ import pandas as pd
 from matplotlib.patches import Circle, Ellipse
 
 from .harness import Simulation
+from .metrics import eval_error_column, per_step
 
 ROBOT_COLORS = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
@@ -68,7 +69,8 @@ def draw_frame(sim: Simulation, ax: Optional[plt.Axes] = None, show_comm: bool =
     ax.set_aspect("equal")
     active = ", ".join(f"T{tid}->R{ad.robot.id}" for tid, ad in sim.dispatcher.active.items())
     ax.set_title(f"t = {sim.t:6.1f} s   strategy = {sim.strategy.name}   msgs = {sim.comm.messages_sent()}"
-                 + (f"   dispatch: {active}" if active else ""), fontsize=10)
+                 + (f"   dispatch: {active}" if active else "")
+                 + ("   SERVER DOWN" if not sim.comm.coordinator_up else ""), fontsize=10)
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     return ax
@@ -126,15 +128,19 @@ def export_frames(sim: Simulation, out_dir: str, every_s: float = 1.0, duration:
 # Result plots (consume harness logs)
 # ---------------------------------------------------------------------------
 def plot_error_over_time(step_df: pd.DataFrame, ax: Optional[plt.Axes] = None, per_robot: bool = True,
-                         events_df: Optional[pd.DataFrame] = None) -> plt.Axes:
-    """Belief error vs time for one trial (team-min and per-robot)."""
+                         events_df: Optional[pd.DataFrame] = None, show_best: bool = True) -> plt.Axes:
+    """Belief error vs time for one trial: team mean over alive robots (headline
+    metric), optionally the best robot, and each robot's own error."""
     if ax is None:
         _, ax = plt.subplots(figsize=(9, 3.5))
-    team = step_df.groupby("t")["error"].min()
-    ax.plot(team.index, team.values, color="k", lw=1.8, label="team (best robot)")
+    steps = per_step(step_df).groupby("t").mean(numeric_only=True)
+    ax.plot(steps.index, steps["mean"], color="k", lw=1.8, label="team (mean of alive robots)")
+    if show_best:
+        ax.plot(steps.index, steps["best"], color="k", lw=1.0, ls=":", label="best robot")
     if per_robot:
-        for rid, g in step_df.groupby("robot_id"):
-            ax.plot(g["t"], g["error"], lw=0.8, alpha=0.6, label=f"robot {rid}")
+        err = eval_error_column(step_df)
+        for rid, g in step_df.assign(_e=err).groupby("robot_id"):
+            ax.plot(g["t"], g["_e"], lw=0.8, alpha=0.6, label=f"robot {rid}")
     if events_df is not None and not events_df.empty:
         for t in events_df.loc[events_df["event"] == "relocation", "t"]:
             ax.axvline(t, color="tab:red", ls="--", lw=0.8, alpha=0.7)
@@ -146,14 +152,12 @@ def plot_error_over_time(step_df: pd.DataFrame, ax: Optional[plt.Axes] = None, p
 
 
 def plot_rmse_over_time(trials_dir: str, ax: Optional[plt.Axes] = None, label: Optional[str] = None) -> plt.Axes:
-    """RMSE of team error vs time averaged across all trial step logs in a results dir."""
+    """Team RMSE vs time (mean over alive robots per step, then over trials)
+    from all trial step logs in a results dir."""
     import glob
 
     files = sorted(glob.glob(os.path.join(trials_dir, "trial_*_steps.csv")))
-    series = []
-    for f in files:
-        df = pd.read_csv(f)
-        series.append(df.groupby("t")["error"].min() ** 2)
+    series = [per_step(pd.read_csv(f)).groupby("t")["mse"].mean() for f in files]
     if not series:
         raise FileNotFoundError(f"no step logs in {trials_dir}")
     mse = pd.concat(series, axis=1).mean(axis=1)
@@ -169,7 +173,7 @@ def plot_rmse_over_time(trials_dir: str, ax: Optional[plt.Axes] = None, label: O
 
 def plot_metric_bars(trials: pd.DataFrame, metric: str, group: str = "strategy", ax: Optional[plt.Axes] = None) -> plt.Axes:
     """Bar chart of mean +- 95% CI of ``metric`` per ``group`` (e.g. search
-    efficiency: time_to_first_localisation per strategy)."""
+    efficiency: time_all_localised per strategy)."""
     if ax is None:
         _, ax = plt.subplots(figsize=(6, 4))
     g = trials.groupby(group)[metric]
