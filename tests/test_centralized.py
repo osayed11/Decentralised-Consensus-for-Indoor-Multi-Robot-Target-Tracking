@@ -27,7 +27,7 @@ def update(s, robot, observation, msgs, t):
 
 
 def test_server_fuses_duplicates_once_and_preserves_time():
-    s, robots, comm = setup_strategy(process_noise=0)
+    s, robots, comm = setup_strategy(process_noise=0, model="static")
     msgs = [obs(0, [4, 4], 0), obs(2, [4.2, 4], 0)]
     b = message_to_belief(s.coordinator_step(msgs + msgs, comm, robots, 0.1)[0])
     np.testing.assert_allclose(b.mean, [4.1, 4])
@@ -49,7 +49,7 @@ def test_batch_reset_is_logged_and_stale_data_ignored():
 
 
 def test_client_replaces_without_double_counting():
-    s, robots, comm = setup_strategy(process_noise=0, absence=False)
+    s, robots, comm = setup_strategy(process_noise=0, absence=False, model="static")
     local = update(s, robots[1], np.array([4., 4.]), [], 0)
     hub = Belief(np.array([4.1, 4]), np.eye(2) * 0.045, timestamp=0.1, last_seen=0)
     msg = belief_message(COORDINATOR, 0, hub, 0.1)
@@ -130,3 +130,54 @@ def test_server_absence_clears_client_but_preserves_newer_sighting():
     assert not update(s, robots[0], None, [msg], 1.1).valid
     fresh = update(s, robots[0], np.array([8., 8.]), [msg], 1.2)
     assert fresh.valid and fresh.last_seen == 1.2
+
+
+@pytest.mark.parametrize('model', ['imm', 'static'])
+def test_client_continues_server_prediction_without_double_counting(model):
+    s, robots, comm = setup_strategy(model=model, absence=False)
+    # Build a moving track from two observers, including duplicate uplinks.
+    for step in range(60):
+        t = step * 0.1
+        xy = [2 + t, 7]
+        batch = [obs(0, xy, t), obs(1, xy, t)]
+        replies = s.coordinator_step(batch + batch, comm, robots, t)
+    hub = s._hub[0]
+    if model == 'imm':
+        assert hub.p_moving > 0.5
+        assert hub.velocity[0] > 0.5
+    # Neither a delayed reply nor receiving it again is a new observation.
+    for when in (t + 0.1, t + 0.5, t + 1.0):
+        received = update(s, robots[2], None, replies, when)
+        expected = s.estimator.predict(hub, when)
+        np.testing.assert_allclose(received.mean, expected.mean)
+        np.testing.assert_allclose(received.cov, expected.cov)
+        assert received.last_seen == t
+        assert not s._local[(2, 0)].valid
+        if model == 'imm':
+            np.testing.assert_allclose(received.velocity, expected.velocity)
+            assert received.p_moving == pytest.approx(expected.p_moving)
+    # With no further replies, the cached posterior still predicts correctly.
+    received = update(s, robots[2], None, [], t + 2.0)
+    np.testing.assert_allclose(received.mean, s.estimator.predict(hub, t + 2.0).mean)
+    assert s._hub[0].timestamp == t
+
+
+def test_imm_messages_are_independent_copies_and_count_nested_arrays():
+    from sim.comms import _payload_size
+    s, robots, comm = setup_strategy(absence=False)
+    msg = s.coordinator_step([obs(0, [4, 4], 0)], comm, robots, 0)[0]
+    restored = message_to_belief(msg)
+    restored.imm['x'][0][0] = 99
+    restored.imm['P'][0][0, 0] = 99
+    restored.imm['mu'][0] = 0
+    restored.velocity[0] = 99
+    assert msg['imm']['x'][0][0] == 4
+    assert msg['imm']['P'][0][0, 0] != 99
+    assert msg['imm']['mu'][0] > 0
+    assert msg['velocity'][0] == 0
+    msg['imm']['x'][0][0] = 88
+    assert s._hub[0].imm['x'][0][0] == 4
+    assert _payload_size({'states': [np.zeros(4), np.zeros((4, 4))]}) == 160
+    legacy = {k: v for k, v in msg.items() if k not in ('imm', 'velocity', 'p_moving')}
+    assert _payload_size(msg) > _payload_size(legacy)
+    assert message_to_belief(legacy).imm is None

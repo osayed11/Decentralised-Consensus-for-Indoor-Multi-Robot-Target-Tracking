@@ -69,6 +69,12 @@ Every payload: `type`, `sender`, `target_id`, `t_sent`.
   before the move must not pull my fresh belief back. `reset_count` is per robot, so it is **not**
   comparable across robots.
 * `message_to_belief(msg)` turns a received `belief` message into a `Belief`.
+* IMM belief messages also include `velocity`, `p_moving` and the complete `imm`
+  posterior (mode states, covariances, probabilities and blended-output cache).
+  These are copied on encoding and decoding so centralized clients can predict
+  the server estimate between replies without sharing mutable filter state or
+  fusing the same observations again. Older position-only messages remain valid.
+  Communication byte estimates include nested IMM arrays.
 
 ## 5. Shared estimator (`sim/estimator.py`)
 

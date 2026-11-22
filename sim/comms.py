@@ -175,6 +175,8 @@ def _payload_size(payload: Dict[str, Any]) -> int:
             size += len(v.encode())
         elif isinstance(v, dict):
             size += _payload_size(v)
+        elif isinstance(v, (list, tuple)):
+            size += _payload_size(dict(enumerate(v)))
         else:
             size += 8
     return size
