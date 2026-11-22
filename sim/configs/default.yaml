@@ -12,6 +12,8 @@ use_line_of_sight: false
 relocation_dist: uniform
 relocation_min: 30.0
 relocation_max: 90.0
+target_motion: carried       # carried (walked along a path) | teleport
+carry_speed: 1.2             # m/s walking speed of the carrier
 query_interval: 60.0
 first_query_at: 30.0
 dispatch_success_radius: 1.0

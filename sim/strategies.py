@@ -84,15 +84,18 @@ class _SharedEstimatorBase(CoordinationStrategy):
     ``strategy_kwargs`` in the config are passed here, e.g.
     ``{gate_prob: 0.99, process_noise: 0.01, confirm: 1}`` (``gate`` sets the
     chi-square threshold directly and overrides ``gate_prob``), plus the
-    no-sighting rule: ``absence`` (on/off), ``absence_view_fraction``."""
+    no-sighting rule: ``absence`` (on/off), ``absence_view_fraction``; and the
+    target model: ``model`` ("imm" resting/carried, default, or "static") with
+    ``mean_rest``, ``mean_walk``, ``accel_noise``, ``init_speed_std``,
+    ``max_pos_std`` (see ``EstimatorConfig``)."""
 
     def __init__(self, gate: Optional[float] = None, gate_prob: float = 0.99,
                  process_noise: float = 0.01, confirm: int = 1, absence: bool = True,
-                 absence_view_fraction: float = 0.8):
+                 absence_view_fraction: float = 0.8, **model_kwargs):
         self.config = EstimatorConfig(process_noise=process_noise,
                                       gate=gate if gate is not None else chi2_threshold(gate_prob),
                                       confirm=confirm, absence=absence,
-                                      absence_view_fraction=absence_view_fraction)
+                                      absence_view_fraction=absence_view_fraction, **model_kwargs)
 
     def reset(self, robots, rng):
         super().reset(robots, rng)

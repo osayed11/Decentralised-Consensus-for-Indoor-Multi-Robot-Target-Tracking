@@ -1,3 +1,5 @@
+# These tests pin the single static filter (model="static"); the resting/carried
+# (IMM) model is tested in test_imm.py.
 import numpy as np
 import pytest
 
@@ -20,7 +22,7 @@ def test_chi2_threshold_two_dof():
 
 
 def test_first_observation_initialises_without_a_reset():
-    est = Estimator()
+    est = Estimator(EstimatorConfig(model="static"))
     b = est.update(0, 0, Belief(), np.array([1.0, 2.0]), SIGMA, 0.0)
     np.testing.assert_allclose(b.mean, [1.0, 2.0])
     np.testing.assert_allclose(b.cov, SIGMA ** 2 * np.eye(2))
@@ -29,14 +31,14 @@ def test_first_observation_initialises_without_a_reset():
 
 def test_noise_is_averaged_away():
     rng = np.random.default_rng(0)
-    est = Estimator(EstimatorConfig(process_noise=0.0))
+    est = Estimator(EstimatorConfig(model="static", process_noise=0.0))
     b = converged_belief(est, np.array([5.0, 5.0]), rng, n=100)
     assert np.linalg.norm(b.mean - [5.0, 5.0]) < 0.1
     assert b.cov[0, 0] < 2 * SIGMA ** 2 / 100  # roughly sigma^2 / n
 
 
 def test_prediction_inflates_the_covariance():
-    est = Estimator(EstimatorConfig(process_noise=0.02))
+    est = Estimator(EstimatorConfig(model="static", process_noise=0.02))
     b = Belief(mean=np.zeros(2), cov=0.1 * np.eye(2), timestamp=0.0)
     b2 = est.predict(b, 10.0)
     np.testing.assert_allclose(b2.cov, (0.1 + 0.2) * np.eye(2))
@@ -45,7 +47,7 @@ def test_prediction_inflates_the_covariance():
 
 def test_relocation_triggers_a_reset():
     rng = np.random.default_rng(1)
-    est = Estimator()
+    est = Estimator(EstimatorConfig(model="static"))
     b = converged_belief(est, np.array([5.0, 5.0]), rng)
     resets_before = b.reset_count  # can be > 0: noise sometimes passes the gate (false resets)
     b = est.update(0, 0, b, np.array([8.0, 5.0]), SIGMA, 10.0)
@@ -57,7 +59,7 @@ def test_relocation_triggers_a_reset():
 
 def test_confirm_needs_consecutive_outliers():
     rng = np.random.default_rng(2)
-    est = Estimator(EstimatorConfig(confirm=2))
+    est = Estimator(EstimatorConfig(model="static", confirm=2))
     b = converged_belief(est, np.array([5.0, 5.0]), rng)
     before, resets_before = b.mean.copy(), b.reset_count
     b = est.update(0, 0, b, np.array([8.0, 5.0]), SIGMA, 10.0)  # first outlier: ignored, not fused
@@ -71,7 +73,7 @@ def test_false_reset_rate_matches_the_gate():
     """With a static target and a converged belief, d2 ~ chi2(2), so about 1 - p of
     the observations are taken for relocations: the false-reset side of the trade-off."""
     rng = np.random.default_rng(3)
-    est = Estimator(EstimatorConfig(gate=chi2_threshold(0.95), process_noise=0.0))
+    est = Estimator(EstimatorConfig(model="static", gate=chi2_threshold(0.95), process_noise=0.0))
     b = converged_belief(est, np.zeros(2), rng, n=200)
     est.reset_log()
     for k in range(4000):
@@ -81,7 +83,7 @@ def test_false_reset_rate_matches_the_gate():
 
 
 def test_no_observation_only_predicts():
-    est = Estimator(EstimatorConfig(process_noise=0.01))
+    est = Estimator(EstimatorConfig(model="static", process_noise=0.01))
     b = est.update(0, 0, Belief(), np.zeros(2), SIGMA, 0.0)
     b2 = est.update(0, 0, b, None, SIGMA, 1.0)
     np.testing.assert_allclose(b2.mean, b.mean)

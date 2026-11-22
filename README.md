@@ -11,12 +11,12 @@ the research team's contribution.
 |---|---|---|
 | `sim/environment.py` | complete | floor plan (default house/office, or from 2D array / image / .npy / .txt), occupancy grid, inflation, free-space sampling, Bresenham line-of-sight |
 | `sim/robot.py` | complete | holonomic point-mass (default, with acceleration limit and corner lookahead) or diff-drive kinematics, waypoint following, range + Gaussian-noise sensor (optional LOS), `Belief` container |
-| `sim/target.py` | complete | random relocation (uniform / exponential / fixed / none), `pause_relocation()` / `resume_relocation()` |
+| `sim/target.py` | complete | random relocation (uniform / exponential / fixed / none); carried (walked along a planned path at `carry_speed`) or teleport; `pause_relocation()` / `resume_relocation()` |
 | `sim/planning.py` | complete | A* on the inflated grid, 8-connected, string-pulled waypoints |
 | `sim/faults.py` | complete | unexpected robot and central-server failures: constant-risk probability or fixed time, permanent or temporary (see Failures) |
 | `sim/dispatch.py` | complete (pipeline) | `query_target()` → select robot → pause relocation → plan to belief → drive → success / failure + logging |
 | `sim/harness.py` | complete | `SimConfig` (YAML/JSON/dataclass), `Simulation` step loop, `run_trials`, `run_sweep`, CSV logs, mean/std/95% CI aggregation |
-| `sim/estimator.py`, `sim/messages.py` | complete | shared Kalman filter with innovation gating and belief reset; agreed message formats |
+| `sim/estimator.py`, `sim/messages.py` | complete | shared resting/carried (IMM) filter, or the single static Kalman filter, with innovation gating and belief reset; agreed message formats |
 | `sim/visualize.py` | complete | 2D view (robots, sensor circles, true target, beliefs + covariance ellipses, comm edges), animation / frame export, result plots |
 | **`sim/strategies.py`** | **partly done** | All three strategies run the shared estimator (`sim/estimator.py`); `independent` is complete. **TODO**: centralized fusion at the hub, decentralized consensus update (messages are already broadcast). See `SHARED_COMPONENTS.md` |
 | `sim/comms.py` | complete | range-based graph, packet loss (own random stream), delivery to `robot.inbox`, per-message log and cost metrics. See `SHARED_COMPONENTS.md` |
@@ -58,11 +58,26 @@ python run_experiments.py --config sim/configs/default.yaml --sweep strategy ind
 ## Outputs (`results/<name>/`)
 
 * `trial_XXX_steps.csv` — per (t, target, robot): true pos, robot pos, belief, error, observed flag, cumulative messages
-* `trial_XXX_events.csv` — relocations, relocation detections, queries, dispatch outcomes, robot failures
+* `trial_XXX_events.csv` — relocations (move starts; x, y = destination), arrivals, relocation detections, queries, dispatch outcomes, robot failures
 * `trial_XXX_dispatch.csv` — one row per query: robot, start/end time, success, reason, belief error at dispatch, distance
 * `trials.csv` — one row per trial: `rmse_mean`, `frac_robots_localised`, `rmse_worst`, `rmse_best`, `time_all_localised`, `search_success_all`, `time_any_localised`, `messages_sent`, `bytes_sent`, `dispatch_success_rate`, `dispatch_time_mean`, …
 * `summary.csv` — mean / std / 95% CI / n per metric
 * `config.json`
+
+## Target motion (`sim/target.py`)
+
+By default the target is **carried**: when a move is due, a person picks it up and
+walks it to a new uniformly random reachable position along a collision-free path
+(the same planner the robots use) at `carry_speed` (1.2 m/s, twice the robots' top
+speed), puts it down, and it rests for a time drawn from `relocation_dist`
+(measured from arrival). Robots can see it while it is in transit.
+`target_motion: teleport` restores the instant jump (equivalent to an infinite carry
+speed), so carry speed can be swept as an experiment variable.
+
+* Events: `relocation` when a move starts (x, y = destination), `arrival` when it is put down.
+* Step log: `target_moving` marks steps where the target is in transit.
+* Dispatch pausing only delays the *start* of a move; a target already being carried keeps going.
+* Moves draw only on the target random stream, so runs stay paired across strategies and faults.
 
 ## Failures (`sim/faults.py`)
 
@@ -78,6 +93,28 @@ trial from their own random stream, and targets, each robot's patrol and each
 robot's sensor noise also have their own streams, so the same seed gives the
 same failures for every strategy and a faulty run differs from its fault-free
 twin only by the failure itself. Example configs: `failures.yaml`, `server_failure.yaml`.
+
+## Resting / carried estimator (`sim/estimator.py`)
+
+The shared estimator assumes the target is either **resting** or **being carried**
+and runs an Interacting Multiple Model (IMM) filter: one Kalman filter per mode on
+a shared position-and-velocity state, plus the probability of each mode.
+
+* Resting: velocity is zero; position uncertainty grows slowly (`process_noise`).
+* Carried: constant velocity with acceleration noise `accel_noise` for turns and
+  stops; on steps without a sighting the velocity decays over `velocity_decay_time`,
+  so an unseen carry coasts a few metres instead of through walls.
+* Mode switches follow the mean rest and walk durations (`mean_rest`, `mean_walk`).
+* Uncertainty is capped at walking pace (`init_speed_std`) and the building's
+  spread (`max_pos_std`).
+* `Belief.mean` / `cov` are the blended position, so dispatch, messages and
+  consensus code see the same interface; `Belief.velocity` and `Belief.p_moving`
+  are extra. If code outside the estimator overwrites `mean` / `cov` (e.g. a
+  consensus step), the next update re-centres both modes on the new values.
+* Gating, reset and the no-sighting rule are unchanged, except that a sighting is
+  an outlier only if neither mode explains it.
+* `strategy_kwargs: {model: static}` restores the single static filter (ablation).
+  The step log has a `p_moving` column.
 
 ## No-sighting rule (`sim/estimator.py`)
 

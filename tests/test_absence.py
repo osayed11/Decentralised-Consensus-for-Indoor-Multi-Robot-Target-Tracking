@@ -58,7 +58,9 @@ def test_next_sighting_starts_fresh_without_a_reset_and_keeps_the_check():
 
 
 def test_without_the_rule_the_same_sighting_counts_as_a_reset():
-    est = Estimator(EstimatorConfig(absence=False))
+    # static model: with the resting/carried model a 15 m move in 7 unseen
+    # seconds is explainable as a carry and is tracked without a reset
+    est = Estimator(EstimatorConfig(absence=False, model="static"))
     b = check_empty(est, confident())
     est.update(0, 0, b, np.array([15.0, 0.0]), 0.3, 12.0)
     assert est.relocation_detected(0, 0)

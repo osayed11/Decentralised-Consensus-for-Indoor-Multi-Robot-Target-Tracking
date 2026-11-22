@@ -26,6 +26,10 @@ class Belief:
     last_absence: float = -np.inf   # last time the believed spot was in view and found empty
     absence_pos: Optional[np.ndarray] = None  # where the robot stood for that check (centre of the area seen empty)
     absence_radius: float = 0.0     # radius of the area seen empty around absence_pos
+    # Resting/carried (IMM) estimator only; None with the static estimator.
+    velocity: Optional[np.ndarray] = None    # blended velocity estimate, m/s
+    p_moving: float = float("nan")           # probability the target is being carried
+    imm: Optional[dict] = None               # per-model states; internal to sim/estimator.py
 
     @property
     def valid(self) -> bool:
