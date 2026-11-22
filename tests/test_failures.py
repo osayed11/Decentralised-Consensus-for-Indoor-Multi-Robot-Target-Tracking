@@ -63,10 +63,13 @@ def test_every_strategy_gets_the_same_failures():
 
 
 def test_failures_do_not_change_the_rest_of_the_world():
-    """Fault-free vs faulty run with the same seed: same target relocations, and
-    the surviving robots follow exactly the same route."""
-    base = run(relocation_min=5.0, relocation_max=15.0)
-    faulty = run(relocation_min=5.0, relocation_max=15.0, robot_failures={1: 20.0})
+    """With local collision interactions disabled, faults do not affect the
+    other robots' patrol trajectories or the target relocation RNG.
+    With safety enabled, a failed robot can physically obstruct another robot,
+    so unchanged trajectories are neither expected nor desirable.
+    """
+    base = run(relocation_min=5.0, relocation_max=15.0, robot_avoidance=False)
+    faulty = run(relocation_min=5.0, relocation_max=15.0, robot_failures={1: 20.0}, robot_avoidance=False)
     r_base = event_times(base, "relocation")[["t", "x", "y"]].to_numpy()
     r_faulty = event_times(faulty, "relocation")[["t", "x", "y"]].to_numpy()
     assert len(r_base) >= 3

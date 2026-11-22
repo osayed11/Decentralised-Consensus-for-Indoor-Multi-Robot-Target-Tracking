@@ -6,7 +6,7 @@ strategies now run on them; what is still open is listed at the end of section 1
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install numpy matplotlib networkx pandas pyyaml pytest
-pytest -q tests                      # 20 tests, ~2 s
+pytest -q tests                      # run tests for the current branch (count varies)
 python demo.py --strategy decentralized --duration 60   # comm edges + message count now visible
 ```
 
@@ -23,6 +23,8 @@ python demo.py --strategy decentralized --duration 60   # comm edges + message c
 | Centralized fusion at the hub | `sim/strategies.py` | **TODO** |
 | Gating metrics (false resets / missed relocations) | harness | **TODO** (being built in parallel); the data it needs is logged, see 5.3 |
 | Dispatch selection | `sim/dispatch.py` | unchanged (still the true-distance stub) |
+| Independent exploration and tracking (separate development branch) | `sim/exploration.py`, `sim/tracking.py`, `sim/harness.py` | **implemented in independent MVP**, not automatically merged into `shared-comms-estimator`; see §10 |
+| Shared local robot collision avoidance (separate development branch) | `sim/safety.py`, `sim/robot.py`, `sim/harness.py` | **implemented in independent MVP**; integration across strategies should be confirmed after merging; see §10 |
 
 ## 2. Communication layer (`sim/comms.py`)
 
@@ -184,3 +186,139 @@ def update_belief(self, robot, target_id, observation, neighbor_messages, t):
 ## 9. Files changed
 `sim/comms.py`, `sim/robot.py` (Belief fields), `sim/strategies.py` (shared base, decentralized
 broadcast), new `sim/estimator.py`, `sim/messages.py`, `tests/`.
+
+## 10. Independent exploration, safety and tracking MVP (separate development work)
+
+> **Integration status:** This section documents the latest `independent_tracking_mvp` implementation, which builds on the shared estimator and communication code. It is **not a claim that these changes are merged into branch `shared-comms-estimator`**. When merging, reconcile changes to `sim/harness.py`, `sim/robot.py`, `sim/visualize.py`, configuration and tests. The shared estimator/comms specifications in §§2–9 remain relevant.
+
+### 10.1 Scope and behaviour
+
+The independent strategy now has a minimal working **Explore → Track → Reacquire** navigation policy:
+
+| Mode | Trigger | Behaviour |
+|---|---|---|
+| **Explore** | No current local target observation or reacquisition has ended | Sample a random *reachable* free-space goal and follow an A* path; do not use target truth, peers' beliefs or coverage history to select the goal. |
+| **Track** | **This robot** observes target 0 | Follow **its own** Kalman-filtered `robot.beliefs[0].mean` using A*. Stop approaching within `tracking_stop_radius`; replan if the estimate moves far enough or the replan interval elapses. |
+| **Reacquire** | Target observation disappears after tracking | Investigate the last locally estimated destination; immediately resume tracking on a new sighting; otherwise return to exploration on goal completion/path exhaustion or after `reacquire_timeout`. |
+
+The follower is intentionally minimal: **one target** (`n_targets: 1`) and the **independent** strategy. The feature is opt-in (`independent_tracking: false` by default in the general configuration, `true` in the example below). All movement still uses the existing A* planner and robot dynamics, including local safety checks. No inter-robot coordination messages are sent by the independent strategy. The simulation uses target ground truth for synthesising observations and scoring results, **not** as a tracking destination.
+
+### 10.2 Robust random patrol (Phase 1)
+
+`sim/exploration.py` provides an `IndependentPatrol` controller. On a new goal request it:
+
+1. Samples destinations in the largest reachable free-space component.
+2. Rejects candidates closer than `patrol_min_goal_distance`.
+3. Verifies an A* route, with at most `patrol_max_goal_attempts` attempts.
+4. Follows the route using the existing navigation/motion controller.
+5. Drops stalled routes when progress over `patrol_stall_timeout` falls below `patrol_progress_distance`, then chooses a replacement.
+
+Failed robots do not move or sense. A recovered robot resumes patrol with a new goal. Goal decisions depend on the robot's own state and the **known static map**, not other robots' live locations or target truth.
+
+### 10.3 Private exploration memory (Phase 2)
+
+`ExplorationMemory` maintains a separate `last_seen[row, col]` grid **for each robot**. `-inf` means the cell has not been observed; otherwise the value is the latest simulated observation time. Every `exploration_observe_interval`, the robot marks eligible reachable, clearance-safe grid-cell centres inside `sensor_range`. When `use_line_of_sight: true`, a cell also must pass `Environment.line_of_sight` so walls block visibility. Only live robots update their histories.
+
+Memory is retained after temporary failures if `keep_belief_on_recovery: true`, otherwise reset. Each robot's coverage map remains private; the **union of all maps is computed only by offline evaluation**, never used as a control input.
+
+**Important:** coverage history is still **passive**. Destination selection is random, not based on freshness or coverage. Coverage-aware waypoint scoring and multi-robot Voronoi/Lloyd control have **not** been implemented. The Week 4 lab informs the grid-based coverage concept, not the current robot control algorithm.
+
+### 10.4 Local robot-to-robot collision avoidance
+
+`sim/safety.py` and the motion integration in `sim/robot.py` / `sim/harness.py` add a **shared geometric safety layer**:
+
+- The simulator provides nearby robot centres inside `robot_detection_range` (default **2.0 m**) as local proximity readings; this is **not radio communication** and exposes no neighbours' estimates or future paths.
+- Each planned motion segment is clipped before entering a nearby robot's exclusion disc. The clearance is the two robot radii plus `robot_safety_margin`: with 0.30 m radii and 0.05 m margin, centre separation must stay at least **0.65 m**.
+- The existing route is retained so the robot can retry movement next step; failed robots remain physical obstacles. Patrols can abandon paths after the existing stall timeout.
+- This is **stop-and-wait, short-step collision prevention**, **not** a control barrier function, reciprocal collision-avoidance planner or guaranteed deadlock-free controller. Opposing robots may still block one another in narrow corridors. The proximity model has no occlusion/noise/missed detections and uses sequential short movement steps.
+
+Use the same safety settings for all three strategies in controlled experiments. Changing the environment physically (e.g. a robot failing and blocking a doorway) may legitimately change another robot's trajectory even without communication.
+
+### 10.5 Key configuration
+
+The standalone MVP demonstration lives at `sim/configs/independent_exploration.yaml`:
+
+```yaml
+name: independent_exploration
+strategy: independent
+n_robots: 3
+n_targets: 1
+patrol: true
+independent_tracking: true
+tracking_stop_radius: 0.8
+tracking_replan_distance: 0.5
+tracking_replan_interval: 1.0
+reacquire_timeout: 20.0
+robot_avoidance: true
+robot_detection_range: 2.0
+robot_safety_margin: 0.05
+patrol_min_goal_distance: 1.0
+patrol_max_goal_attempts: 20
+patrol_stall_timeout: 8.0
+patrol_progress_distance: 0.15
+exploration_observe_interval: 0.5
+use_line_of_sight: true
+query_interval: null
+relocation_dist: uniform
+relocation_min: 30.0
+relocation_max: 90.0
+dt: 0.1
+time_limit: 120.0
+n_trials: 3
+seed: 0
+output_dir: results
+```
+
+`query_interval: null` intentionally disables the separate dispatch mechanism: `sim/dispatch.py` still contains a ground-truth-based selection placeholder. `use_line_of_sight: true` is set **in this example**, while older configs may still default to `false`; match it in comparisons.
+
+### 10.6 Run and inspect the independent MVP
+
+From the **independent MVP repository root** (containing `demo.py`):
+
+```bash
+python -m pip install numpy pandas matplotlib networkx pyyaml pytest pillow
+python -m pytest -q tests
+
+# Animated demo with mode labels (explore / track / reacquire):
+python demo.py --config sim/configs/independent_exploration.yaml --duration 60 --paths
+
+# Headless animated output:
+python demo.py --config sim/configs/independent_exploration.yaml --duration 30 --paths --save results/independent_tracking.gif
+
+# Three seeded trials:
+python run_experiments.py --config sim/configs/independent_exploration.yaml --trials 3
+
+# Separate per-robot coverage visualisations:
+python show_exploration.py --duration 60 --output results/coverage.png
+```
+
+The previously completed independent MVP development run reported **61 passing tests** (including tests for patrol, private memory, geometric safety and navigation-mode transitions). That count is **not** a test claim for the separate shared branch after integration.
+
+The demo labels robot navigation modes and hides **unused radio graph lines** under the independent strategy; this is a visual choice, not a change to the range-based communication infrastructure described in §2. Check experiment logs for `navigation_mode`, state changes, `tracking_engagements` and `messages_sent`. Patrol/coverage diagnostics include `exploration_coverage`, `exploration_coverage_mean`, `exploration_coverage_union`, `patrol_goals_assigned`, `patrol_goals_rejected` and `patrol_stalls`; safety diagnostics include `robot_safety_stops` and `min_robot_separation`.
+
+### 10.7 Files added or changed in the independent MVP
+
+| File | Responsibility |
+|---|---|
+| `sim/exploration.py` (**new**) | Robust random patrol and private per-robot observation-time maps |
+| `sim/tracking.py` (**new**) | Explore/Track/Reacquire state machine driven by own observations and Kalman belief |
+| `sim/safety.py` (**new**) | Short swept-segment clearance computation against locally detected robots |
+| `sim/harness.py` | Integrates patrol, sensing-memory updates, target-following, proximity input, mode/coverage/safety logging |
+| `sim/robot.py` | Applies optional nearby-robot clearance during movement; counts safety-limited steps |
+| `sim/visualize.py` | Displays navigation modes; suppresses misleading radio lines for independent demos |
+| `sim/configs/independent_exploration.yaml` (**new**) | Working independent MVP scenario |
+| `show_exploration.py` (**new**) | Plots per-robot exploration maps |
+| `tests/test_exploration.py`, `tests/test_robot_safety.py`, `tests/test_tracking.py` (**new**) | Tests of added features |
+| `tests/test_failures.py` | Updates a trajectory-equality assumption for runs with physical robot avoidance enabled |
+
+### 10.8 Fairness, integration and outstanding work
+
+- **Preserve the shared estimator/message definitions** in §§2–5. Independent tracking should **not** bypass the local Kalman filter or use other robots' information.
+- **Use identical sensing, A*, motion, safety and exploration/tracking policies across all three strategies** when comparing information sharing. The MVP follower currently applies to the independent method only; do not interpret results as an information-sharing comparison until the common navigation layer is integrated across strategies.
+- **Paired trial world versus behaviour:** matched seeds and dedicated RNG streams help preserve exogenous relocation/sensing randomness, but robots may physically take different routes after one strategy receives new information. That is an intended behavioural effect, not necessarily a broken pairing.
+- **Metrics caveat:** existing `error_eval` substitutes the building centre when a robot has no belief. Report estimates conditional on `has_belief` separately from whole-team penalty metrics, and distinguish first *physical detection* from all-robot localisation accuracy.
+- **Still open:** decentralised consensus fusion; centralised coordinator fusion; false-reset/missed-relocation metrics; removing the true-distance dispatch stub; coverage-aware goal selection; formal deadlock-free multi-robot traffic management. The latter two are optional improvements, not requirements for the minimal independent baseline.
+
+### 10.9 Additional development notes
+
+For more detail in the independent MVP snapshot, see `EXPLORATION_PHASES_1_2.md`, `LOCAL_ROBOT_AVOIDANCE.md` and `INDEPENDENT_TRACKING_MVP.md`.

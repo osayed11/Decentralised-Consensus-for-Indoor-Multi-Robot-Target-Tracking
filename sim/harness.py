@@ -13,12 +13,13 @@ import pandas as pd
 from .comms import COORDINATOR, CommunicationLayer
 from .dispatch import Dispatcher, DispatchResult
 from .environment import Environment
+from .exploration import IndependentPatrol
 from .faults import FaultSchedule
 from .metrics import accuracy_metrics, failure_impact_summary
-from .planning import plan_path
 from .robot import Belief, Robot
 from .strategies import CoordinationStrategy, make_strategy
 from .target import Target
+from .tracking import LocalTargetFollower
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +41,20 @@ class SimConfig:
     sensor_noise_std: float = 0.3
     use_line_of_sight: bool = False
     kinematics: str = "holonomic"
+    robot_avoidance: bool = True       # shared local safety, not inter-robot communication
+    robot_detection_range: float = 2.0  # m, local proximity sensor for other robots
+    robot_safety_margin: float = 0.05   # m on top of two robot radii
     patrol: bool = True                    # robots wander to random free goals when idle
+    patrol_min_goal_distance: float = 1.0  # m, reject trivially nearby goals
+    patrol_max_goal_attempts: int = 20     # bounded retries per decision
+    patrol_stall_timeout: float = 8.0      # s without meaningful progress
+    patrol_progress_distance: float = 0.15 # m considered meaningful progress
+    exploration_observe_interval: float = 0.5  # s, update private sensor-footprint map
+    independent_tracking: bool = False  # optional MVP; defaults off for legacy comparisons
+    tracking_stop_radius: float = 0.8
+    tracking_replan_distance: float = 0.5
+    tracking_replan_interval: float = 1.0
+    reacquire_timeout: float = 20.0
     # targets
     n_targets: int = 1
     relocation_dist: str = "uniform"       # uniform | exponential | fixed | none
@@ -84,6 +98,15 @@ class SimConfig:
         if unknown:
             raise ValueError(f"unknown config keys: {sorted(unknown)}")
         cfg = cls(**d)
+        if cfg.robot_detection_range < 2 * cfg.robot_radius + cfg.robot_safety_margin:
+            if cfg.robot_avoidance:
+                raise ValueError("robot_detection_range must cover the safety clearance")
+        if cfg.robot_safety_margin < 0:
+            raise ValueError("robot_safety_margin must be non-negative")
+        if cfg.independent_tracking and cfg.strategy != "independent":
+            raise ValueError("independent_tracking currently supports only the independent strategy")
+        if cfg.independent_tracking and cfg.n_targets != 1:
+            raise ValueError("minimal independent tracking supports exactly one target")
         cfg.robot_failures = {int(k): float(v) for k, v in cfg.robot_failures.items()}
         return cfg
 
@@ -159,6 +182,24 @@ class Simulation:
                                      kinematics=cfg.kinematics))
 
         self.robot_rngs = {r.id: np.random.default_rng([self.seed, 2, r.id]) for r in self.robots}
+        self.patrols = {
+            r.id: IndependentPatrol(
+                self.env, self.robot_rngs[r.id],
+                min_goal_distance=cfg.patrol_min_goal_distance,
+                max_goal_attempts=cfg.patrol_max_goal_attempts,
+                stall_timeout=cfg.patrol_stall_timeout,
+                progress_distance=cfg.patrol_progress_distance,
+            ) for r in self.robots
+        }
+
+        self.followers = {
+            r.id: LocalTargetFollower(
+                self.env, stop_radius=cfg.tracking_stop_radius,
+                goal_change_distance=cfg.tracking_replan_distance,
+                replan_interval=cfg.tracking_replan_interval,
+                reacquire_timeout=cfg.reacquire_timeout,
+            ) for r in self.robots
+        }
 
         self.comm = CommunicationLayer(packet_loss_prob=cfg.packet_loss_prob, rng=self.rng)
         self.faults = FaultSchedule(
@@ -187,7 +228,17 @@ class Simulation:
         cfg, t, dt = self.cfg, self.t, self.cfg.dt
 
         # 1. faults (robots and the central server)
-        self.events.extend(self.faults.apply(t, self.robots, self.comm))
+        fault_events = self.faults.apply(t, self.robots, self.comm)
+        self.events.extend(fault_events)
+        for ev in fault_events:
+            if ev["event"] in ("robot_failure", "robot_recovery"):
+                patrol = self.patrols[ev["robot_id"]]
+                patrol.state.reset_motion()
+                self.followers[ev["robot_id"]].reset()
+                if ev["event"] == "robot_recovery":
+                    patrol.state.last_observation_t = -np.inf
+                    if not cfg.keep_belief_on_recovery:
+                        patrol.memory.clear()
 
         # 2. targets relocate
         for tg in self.targets:
@@ -240,14 +291,46 @@ class Simulation:
             self.events.append({"t": t, "event": "dispatch_end", "query_id": res.query_id, "robot_id": res.robot_id,
                                 "target_id": res.target_id, "success": res.success, "reason": res.reason})
 
-        # 8. motion (patrol planning for idle robots)
+        # 8. motion: shared A*, patrol and geometric robot avoidance for all strategies.
+        # Optional independent-only tracker takes over patrol destinations when
+        # this robot personally sees the target (no target truth or messaging).
+        # The exploration map is private to each robot; it is updated from its
+        # geometric sensor footprint, never from other robots or target truth.
         for r in self.robots:
             if r.failed:
                 continue
-            if cfg.patrol and r.mode == "patrol" and not r.has_path:
-                goal = self.env.random_free_position(self.robot_rngs[r.id])
-                r.set_path(plan_path(r.position, goal, self.env))
-            r.step(dt, self.env)
+            patrol = self.patrols[r.id]
+            following = False
+            if cfg.independent_tracking:
+                follower = self.followers[r.id]
+                old_mode = follower.state.mode
+                new_mode = follower.step(r, r.beliefs.get(0, Belief()),
+                                         r.last_observations.get(0), t)
+                following = follower.active
+                if new_mode != old_mode:
+                    self.events.append({"t": t, "event": "navigation_mode", "robot_id": r.id,
+                                        "from": old_mode, "to": new_mode})
+                    patrol.state.reset_motion()
+            if cfg.patrol and not following:
+                patrol.step(r, t)
+            # Local proximity sensing is separate from the radio graph and uses
+            # only nearby physical robot positions. Failed robots remain obstacles.
+            nearby = []
+            if cfg.robot_avoidance:
+                nearby = [other.position.copy() for other in self.robots
+                          if other.id != r.id and
+                          np.linalg.norm(other.position - r.position) <= cfg.robot_detection_range]
+            r.step(dt, self.env, local_robot_positions=nearby,
+                   robot_clearance=(2 * cfg.robot_radius + cfg.robot_safety_margin)
+                   if cfg.robot_avoidance else 0.0)
+            patrol.observe_if_due(r, t + dt, cfg.exploration_observe_interval,
+                                  cfg.use_line_of_sight)
+
+        # Offline safety metric only: never fed to the robots' controllers.
+        if len(self.robots) >= 2:
+            distances = [float(np.linalg.norm(a.position - b.position))
+                         for i, a in enumerate(self.robots) for b in self.robots[i + 1:]]
+            self.min_robot_separation = min(getattr(self, "min_robot_separation", np.inf), *distances)
 
         # 9. log
         if self.step_idx % cfg.log_every == 0:
@@ -303,7 +386,10 @@ class Simulation:
                     "has_belief": b.valid,
                     "observed": r.last_observations.get(tg.id) is not None,
                     "robot_failed": r.failed, "robot_mode": r.mode,
+                    "navigation_mode": self.followers[r.id].state.mode if self.cfg.independent_tracking else "explore",
                     "messages_sent_cum": n_msgs,
+                    "exploration_coverage": self.patrols[r.id].memory.coverage_fraction,
+                    "robot_safety_stops_cum": r.robot_safety_stops,
                 })
 
     # ---- outputs -----------------------------------------------------------
@@ -335,6 +421,21 @@ class Simulation:
         out["messages_delivered"] = self.comm.messages_delivered()
         out["bytes_sent"] = self.comm.bytes_sent()
         out["total_distance"] = float(sum(r.distance_travelled for r in self.robots))
+        out["robot_safety_stops"] = int(sum(r.robot_safety_stops for r in self.robots))
+        out["min_robot_separation"] = float(getattr(self, "min_robot_separation", np.inf))
+        out["exploration_coverage_mean"] = float(np.mean(
+            [self.patrols[r.id].memory.coverage_fraction for r in self.robots])) if self.robots else np.nan
+        if self.robots:
+            union = np.logical_or.reduce([self.patrols[r.id].memory.observed_mask for r in self.robots])
+            n_cells = int(self.env.reachable.sum())
+            out["exploration_coverage_union"] = float(union.sum() / n_cells) if n_cells else 0.0
+        else:
+            out["exploration_coverage_union"] = np.nan
+        out["patrol_goals_assigned"] = sum(p.state.goals_assigned for p in self.patrols.values())
+        out["patrol_goals_rejected"] = sum(p.state.goals_rejected for p in self.patrols.values())
+        out["patrol_stalls"] = sum(p.state.stalls for p in self.patrols.values())
+        out["tracking_engagements"] = int(sum(
+            e["event"] == "navigation_mode" and e["to"] == "track" for e in self.events))
         out["n_relocations"] = int(sum(len(tg.history) for tg in self.targets))
         out["n_relocation_resets"] = n_ev("relocation_detected")
         out["n_absence_detections"] = n_ev("absence_detected")

@@ -53,6 +53,7 @@ class Robot:
     failure_time: float = np.inf
     distance_travelled: float = 0.0
     blocked_count: int = 0
+    robot_safety_stops: int = 0
     beliefs: Dict[int, Belief] = field(default_factory=dict)
     last_observations: Dict[int, Optional[np.ndarray]] = field(default_factory=dict)
     inbox: List[dict] = field(default_factory=list)
@@ -66,7 +67,9 @@ class Robot:
     def has_path(self) -> bool:
         return len(self.path) > 0
 
-    def step(self, dt: float, env: Environment) -> None:
+    def step(self, dt: float, env: Environment, *,
+             local_robot_positions: Optional[List[np.ndarray]] = None,
+             robot_clearance: float = 0.0) -> None:
         """Move toward the next waypoint.
 
         Holonomic: velocity ramps toward the waypoint direction at up to
@@ -76,6 +79,8 @@ class Robot:
         if self.failed or not self.path:
             self.velocity = np.zeros(2)
             return
+        # Keep the path intact if safety clips the proposed movement.
+        original_path = [p.copy() for p in self.path]
         # Pop waypoints we are close enough to.  Intermediate waypoints use a
         # looser tolerance (rounded corners) but only if the shortcut to the
         # following waypoint is clear on the inflated grid.
@@ -142,6 +147,15 @@ class Robot:
                 self.heading = float(np.arctan2(move[1], move[0]))
             self.velocity = move / dt
 
+        if local_robot_positions and robot_clearance > 0:
+            from .safety import safe_motion_fraction
+            safe_fraction = safe_motion_fraction(self.position, move,
+                                                 local_robot_positions, robot_clearance)
+            if safe_fraction < 1.0:
+                self.robot_safety_stops += 1
+                self.path = original_path
+                move = move * safe_fraction
+                self.velocity = move / dt
         new_pos = self.position + move
         if env.is_free(new_pos):
             self.position = new_pos

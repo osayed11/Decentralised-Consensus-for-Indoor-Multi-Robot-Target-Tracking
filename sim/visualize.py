@@ -36,7 +36,7 @@ def draw_frame(sim: Simulation, ax: Optional[plt.Axes] = None, show_comm: bool =
               interpolation="nearest", alpha=0.9, zorder=0)
 
     # comm graph edges
-    if show_comm:
+    if show_comm and sim.strategy.name != "independent":
         pos = {r.id: r.position for r in sim.robots}
         for i, j in sim.comm.graph.edges:
             ax.plot([pos[i][0], pos[j][0]], [pos[i][1], pos[j][1]], color="tab:green", lw=1.2, alpha=0.7, zorder=2)
@@ -53,7 +53,9 @@ def draw_frame(sim: Simulation, ax: Optional[plt.Axes] = None, show_comm: bool =
             ax.plot(pts[:, 0], pts[:, 1], "--", color=c, lw=0.8, alpha=0.6, zorder=3)
         marker = "x" if r.failed else ("s" if r.mode == "dispatch" else "o")
         ax.plot(*r.position, marker=marker, ms=9, color=c, mec="k", zorder=5)
-        ax.annotate(str(r.id), r.position, xytext=(5, 5), textcoords="offset points", fontsize=8, color=c)
+        navigation_state = sim.followers[r.id].state.mode if sim.cfg.independent_tracking else ""
+        robot_label = f"{r.id} ({navigation_state})" if navigation_state else str(r.id)
+        ax.annotate(robot_label, r.position, xytext=(5, 5), textcoords="offset points", fontsize=8, color=c)
         hx = r.position + 0.5 * np.array([np.cos(r.heading), np.sin(r.heading)])
         ax.plot([r.position[0], hx[0]], [r.position[1], hx[1]], color=c, lw=1.5, zorder=5)
         if show_belief:
