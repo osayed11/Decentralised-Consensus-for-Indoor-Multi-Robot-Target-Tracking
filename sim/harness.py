@@ -61,6 +61,8 @@ class SimConfig:
     relocation_min: float = 30.0
     relocation_max: float = 90.0
     relocation_mean: float = 60.0
+    target_motion: str = "carried"        # carried (walked along a path) | teleport
+    carry_speed: float = 1.2               # m/s, walking speed of whoever carries the target
     # strategy
     strategy: str = "independent"
     strategy_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -166,7 +168,8 @@ class Simulation:
         for k in range(cfg.n_targets):
             pos = self.env.random_free_position(self.rng)
             tg = Target(id=k, position=pos, interval_dist=cfg.relocation_dist, interval_min=cfg.relocation_min,
-                        interval_max=cfg.relocation_max, interval_mean=cfg.relocation_mean)
+                        interval_max=cfg.relocation_max, interval_mean=cfg.relocation_mean,
+                        motion=cfg.target_motion, carry_speed=cfg.carry_speed)
             tg.schedule_next(0.0, self.target_rng)
             self.targets.append(tg)
 
@@ -240,12 +243,17 @@ class Simulation:
                     if not cfg.keep_belief_on_recovery:
                         patrol.memory.clear()
 
-        # 2. targets relocate
+        # 2. targets relocate ("relocation" = a move starts; x, y = destination;
+        #    "arrival" = the target is put down, carried motion only)
         for tg in self.targets:
+            was_moving = tg.moving
             ev = tg.step(t, self.env, self.target_rng)
             if ev is not None:
                 self.events.append({"t": t, "event": "relocation", "target_id": tg.id,
                                     "x": ev.new_pos[0], "y": ev.new_pos[1]})
+            if was_moving and not tg.moving:
+                self.events.append({"t": t, "event": "arrival", "target_id": tg.id,
+                                    "x": tg.position[0], "y": tg.position[1]})
 
         # 3. comm graph (stub)
         self.comm.build_graph(self.robots, t)
@@ -377,10 +385,12 @@ class Simulation:
                 self.step_log.append({
                     "t": self.t, "target_id": tg.id, "robot_id": r.id,
                     "true_x": tg.position[0], "true_y": tg.position[1],
+                    "target_moving": tg.moving,
                     "robot_x": r.position[0], "robot_y": r.position[1],
                     "belief_x": b.mean[0] if b.valid else np.nan,
                     "belief_y": b.mean[1] if b.valid else np.nan,
                     "belief_std": float(np.sqrt(np.trace(b.cov) / 2)) if b.cov is not None else np.nan,
+                    "p_moving": b.p_moving if b.valid else np.nan,
                     "error": err,
                     "error_eval": err_eval,
                     "has_belief": b.valid,

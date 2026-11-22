@@ -42,7 +42,12 @@ def draw_frame(sim: Simulation, ax: Optional[plt.Axes] = None, show_comm: bool =
             ax.plot([pos[i][0], pos[j][0]], [pos[i][1], pos[j][1]], color="tab:green", lw=1.2, alpha=0.7, zorder=2)
 
     for tg in sim.targets:
-        ax.plot(*tg.position, marker="*", ms=16, color="gold", mec="k", zorder=6, label=f"target {tg.id}" if tg.id == 0 else None)
+        if getattr(tg, "moving", False):  # being carried: show the rest of its route
+            pts = np.vstack([tg.position] + tg.remaining_path)
+            ax.plot(pts[:, 0], pts[:, 1], ":", color="darkgoldenrod", lw=1.2, zorder=4)
+            ax.plot(*pts[-1], marker="*", ms=10, mfc="none", mec="darkgoldenrod", zorder=4)
+        ax.plot(*tg.position, marker="*", ms=16, color="orange" if getattr(tg, "moving", False) else "gold",
+                mec="k", zorder=6, label=f"target {tg.id}" if tg.id == 0 else None)
 
     for r in sim.robots:
         c = ROBOT_COLORS[r.id % len(ROBOT_COLORS)]
