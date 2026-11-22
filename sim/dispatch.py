@@ -95,7 +95,9 @@ class Dispatcher:
             self.results.append(res)
             return res
         beliefs = {r.id: r.beliefs for r in robots}
-        rid = self.selector(robots, beliefs, target, self.env)
+        busy = {ad.robot.id for ad in self.active.values()}
+        available = [r for r in robots if not r.failed and r.id not in busy]
+        rid = self.selector(available, beliefs, target, self.env)
         if rid is None:
             res.t_end, res.success, res.reason = t, False, "no_robot_available"
             self.results.append(res)
@@ -131,10 +133,10 @@ class Dispatcher:
         for tid, ad in list(self.active.items()):
             r, tg, res = ad.robot, ad.target, ad.result
             dist_true = float(np.linalg.norm(r.position - tg.position))
-            if dist_true <= self.success_radius:
-                self._finish(ad, t, True, "reached_target")
-            elif r.failed:
+            if r.failed:
                 self._finish(ad, t, False, "robot_failed")
+            elif dist_true <= self.success_radius:
+                self._finish(ad, t, True, "reached_target")
             elif t - res.t_start > self.timeout:
                 self._finish(ad, t, False, "timeout")
             elif not r.has_path:
@@ -150,7 +152,8 @@ class Dispatcher:
                     self._finish(ad, t, False, "target_not_at_belief")
             else:
                 continue
-            finished.append(res)
+            if res.success is not None:
+                finished.append(res)
         return finished
 
     def _finish(self, ad: ActiveDispatch, t: float, success: bool, reason: str) -> None:

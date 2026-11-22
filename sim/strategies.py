@@ -23,7 +23,7 @@ from .comms import COORDINATOR, CommunicationLayer
 from .estimator import Estimator, EstimatorConfig, chi2_threshold
 from .messages import (ABSENCE, OBSERVATION, absence_message, belief_message,
                        observation_message, for_target, message_to_belief,
-                       belief_contradicted, contradicted_by_absence)
+                       contradicted_by_absence)
 from .robot import Belief, Robot
 
 Message = Tuple[Optional[int], Dict[str, Any]]  # (receiver_id, None=broadcast, or COORDINATOR; payload)
@@ -155,9 +155,19 @@ class CentralizedStrategy(_SharedEstimatorBase):
         self._detected = {}
         self._absent = {}
 
-    @staticmethod
-    def _receive_absence(belief, msg):
-        if belief.valid and contradicted_by_absence(
+    def _empty_area_contradicts(self, pos, last_seen, checked_pos, checked_at, radius):
+        if not contradicted_by_absence(pos, last_seen, checked_pos, checked_at, radius):
+            return False
+        env = getattr(self, 'env', None)
+        return not (getattr(self, 'use_line_of_sight', False) and env is not None
+                    and not env.line_of_sight(checked_pos, pos))
+
+    def _belief_contradicted(self, pos, last_seen, belief):
+        return (belief.absence_pos is not None and self._empty_area_contradicts(
+            pos, last_seen, belief.absence_pos, belief.last_absence, belief.absence_radius))
+
+    def _receive_absence(self, belief, msg):
+        if belief.valid and self._empty_area_contradicts(
                 belief.mean, belief.last_seen, msg['pos'], msg['t_obs'], msg['radius']):
             return Estimator.apply_absence(belief, msg['t_obs'], msg['pos'], msg['radius'])
         if msg['t_obs'] > belief.last_absence:
@@ -188,10 +198,10 @@ class CentralizedStrategy(_SharedEstimatorBase):
             if (msg['sender'] == COORDINATOR and msg['last_seen'] <= msg['t_sent'] <= t
                     and msg['t_sent'] > cached.timestamp
                     and msg['last_seen'] >= cached.last_seen
-                    and not belief_contradicted(msg['mean'], msg['last_seen'], local)
-                    and not belief_contradicted(msg['mean'], msg['last_seen'], cached)):
+                    and not self._belief_contradicted(msg['mean'], msg['last_seen'], local)
+                    and not self._belief_contradicted(msg['mean'], msg['last_seen'], cached)):
                 cached = message_to_belief(msg)
-        if cached.valid and belief_contradicted(cached.mean, cached.last_seen, local):
+        if cached.valid and self._belief_contradicted(cached.mean, cached.last_seen, local):
             cached = self.estimator.apply_absence(cached, local.last_absence,
                                                   local.absence_pos, local.absence_radius)
         selected = cached if cached.valid and (not local.valid or cached.last_seen >= local.last_seen) else local
@@ -240,7 +250,7 @@ class CentralizedStrategy(_SharedEstimatorBase):
             if msg['type'] == ABSENCE:
                 if self.config.absence:
                     belief = self._receive_absence(belief, msg)
-            elif when >= belief.timestamp and not belief_contradicted(msg['z'], when, belief):
+            elif when >= belief.timestamp and not self._belief_contradicted(msg['z'], when, belief):
                 noise_std = max(msg['noise_std'], np.sqrt(self.config.min_cov))
                 belief = self.estimator.update(COORDINATOR, tid, belief, msg['z'], noise_std, when)
             self._hub[tid] = belief

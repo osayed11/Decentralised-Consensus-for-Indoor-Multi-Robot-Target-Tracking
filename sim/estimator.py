@@ -143,7 +143,7 @@ class Estimator:
                 self.absences.append((t, robot_id, target_id))
             return belief
         z = np.asarray(z, dtype=float)
-        R = (sensor_noise_std ** 2) * np.eye(2)
+        R = max(sensor_noise_std ** 2, self.config.min_cov) * np.eye(2)
         if not belief.valid or belief.cov is None:
             return replace(belief, mean=z.copy(), cov=R.copy(), timestamp=t, source="own_obs", last_seen=t)
 

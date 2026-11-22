@@ -86,7 +86,7 @@ class SimConfig:
     time_limit: float = 300.0
     n_trials: int = 100
     seed: int = 0
-    localised_threshold: float = 1.0   # m; a robot within this of the target counts as "localised"
+    localised_threshold: float = 1.0   # m; evaluated estimate error, not physical robot distance
     log_every: int = 1                  # log every k steps
     output_dir: str = "results"
 
@@ -440,6 +440,12 @@ class Simulation:
         out["n_relocation_resets"] = n_ev("relocation_detected")
         out["n_absence_detections"] = n_ev("absence_detected")
         disp = [r for r in self.dispatcher.results if r.success is not None]
+        # Keep the legacy completed-only rate; expose censoring explicitly.
+        out["n_queries_issued"] = len(self.dispatcher.results)
+        out["n_dispatch_completed"] = len(disp)
+        out["n_dispatch_unfinished"] = len(self.dispatcher.results) - len(disp)
+        out["n_dispatch_successful"] = sum(bool(r.success) for r in disp)
+        out["n_dispatch_failed"] = sum(not r.success for r in disp)
         out["n_queries"] = len(disp)
         out["dispatch_success_rate"] = float(np.mean([r.success for r in disp])) if disp else np.nan
         ok = [r.duration for r in disp if r.success]
