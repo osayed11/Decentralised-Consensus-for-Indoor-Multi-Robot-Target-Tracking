@@ -165,6 +165,18 @@ def update_belief(self, robot, target_id, observation, neighbor_messages, t):
   robot's patrol and sensing have separate streams too, so failures never change the rest of the
   world. Impact is measured around each failure (10 s before vs 30 s after, recovery time) rather than
   only over the whole trial. See `sim/faults.py`, README "Failures".
+* **No-sighting rule — DECIDED (2026-11-22): forget the position, remember the check.** When a
+  robot's believed position is within 80% of its sensor range (and visible, if line-of-sight sensing is
+  on) and the target is not seen, the belief is cleared: the target teleports to a random spot, so the
+  old position carries no information. The check is kept in the belief (`last_absence`, `absence_pos`,
+  `absence_radius` = the area seen empty); `last_seen` is not changed. The next sighting starts a fresh
+  belief and is not counted as a relocation reset. `messages.belief_contradicted(claim_pos,
+  claim_last_seen, my_belief)` says whether a neighbour's claim is stale (older than my check and inside
+  the area I saw empty), so a rumour cannot re-infect a robot. Decentralised robots broadcast an
+  `absence` message instead of a belief while theirs is cleared; centralised robots should send it to
+  the server. Settings in `strategy_kwargs`: `absence` (on/off), `absence_view_fraction`. Event:
+  `absence_detected`. (Briefly implemented first as "keep the mean, raise the uncertainty"; switched
+  because the old position is meaningless and kept producing fake resets.)
 * **Metric — DECIDED (2026-11-22): accuracy is the mean over alive robots** (no belief = building
   centre, failed robots excluded); search efficiency = first time every alive robot is within 1 m.
   Implemented in `sim/metrics.py`, see README "Metrics".

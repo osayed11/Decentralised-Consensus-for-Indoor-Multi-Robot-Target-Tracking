@@ -20,7 +20,7 @@ import numpy as np
 
 from .comms import COORDINATOR, CommunicationLayer
 from .estimator import Estimator, EstimatorConfig, chi2_threshold
-from .messages import belief_message
+from .messages import absence_message, belief_message
 from .robot import Belief, Robot
 
 Message = Tuple[Optional[int], Dict[str, Any]]  # (receiver_id, None=broadcast, or COORDINATOR; payload)
@@ -34,6 +34,17 @@ class CoordinationStrategy:
     def reset(self, robots: List[Robot], rng: np.random.Generator) -> None:
         """Called once at the start of each trial."""
         self.rng = rng
+
+    def bind(self, env, use_line_of_sight: bool = False) -> None:
+        """Called by the simulation after ``reset``: the map and sensing mode,
+        needed to decide whether a believed position is in view."""
+        self.env = env
+        self.use_line_of_sight = use_line_of_sight
+
+    def detect_absence(self, robot: Robot, target_id: int) -> bool:
+        """True if this step's update found the believed position empty
+        (no-sighting rule).  Default: never."""
+        return False
 
     def update_belief(self, robot: Robot, target_id: int, observation: Optional[np.ndarray],
                       neighbor_messages: List[dict], t: float) -> Belief:
@@ -72,24 +83,46 @@ class _SharedEstimatorBase(CoordinationStrategy):
 
     ``strategy_kwargs`` in the config are passed here, e.g.
     ``{gate_prob: 0.99, process_noise: 0.01, confirm: 1}`` (``gate`` sets the
-    chi-square threshold directly and overrides ``gate_prob``)."""
+    chi-square threshold directly and overrides ``gate_prob``), plus the
+    no-sighting rule: ``absence`` (on/off), ``absence_view_fraction``."""
 
     def __init__(self, gate: Optional[float] = None, gate_prob: float = 0.99,
-                 process_noise: float = 0.01, confirm: int = 1):
+                 process_noise: float = 0.01, confirm: int = 1, absence: bool = True,
+                 absence_view_fraction: float = 0.8):
         self.config = EstimatorConfig(process_noise=process_noise,
                                       gate=gate if gate is not None else chi2_threshold(gate_prob),
-                                      confirm=confirm)
+                                      confirm=confirm, absence=absence,
+                                      absence_view_fraction=absence_view_fraction)
 
     def reset(self, robots, rng):
         super().reset(robots, rng)
         self.estimator = Estimator(self.config)
 
+    def belief_in_view(self, robot: Robot, belief: Belief) -> bool:
+        """Was the believed position comfortably in view this step?  Within
+        ``absence_view_fraction`` of the sensor range and, if line-of-sight
+        sensing is on, not behind a wall (a wall is not an absence)."""
+        if not belief.valid:
+            return False
+        if np.linalg.norm(belief.mean - robot.position) > self.config.absence_view_fraction * robot.sensor_range:
+            return False
+        env = getattr(self, "env", None)
+        if getattr(self, "use_line_of_sight", False) and env is not None:
+            return env.line_of_sight(robot.position, belief.mean)
+        return True
+
     def update_belief(self, robot, target_id, observation, neighbor_messages, t):
         prev = robot.beliefs.get(target_id, Belief())
-        return self.estimator.update(robot.id, target_id, prev, observation, robot.sensor_noise_std, t)
+        in_view = observation is None and self.belief_in_view(robot, prev)
+        return self.estimator.update(robot.id, target_id, prev, observation, robot.sensor_noise_std, t,
+                                     in_view=in_view, view_pos=robot.position,
+                                     view_radius=self.config.absence_view_fraction * robot.sensor_range)
 
     def detect_relocation(self, robot, target_id, observation, belief):
         return self.estimator.relocation_detected(robot.id, target_id)
+
+    def detect_absence(self, robot, target_id):
+        return self.estimator.absence_detected(robot.id, target_id)
 
     def get_messages_to_send(self, robot, comm, robots, t):
         return []
@@ -107,7 +140,9 @@ class CentralizedStrategy(_SharedEstimatorBase):
     scheduled fault (coordinator_failure_time, default off); robots then fall back to
     their local estimator.
     TODO (research team): in ``get_messages_to_send`` return
-    ``(COORDINATOR, messages.observation_message(...))``; in ``coordinator_step`` fuse
+    ``(COORDINATOR, messages.observation_message(...))`` (and
+    ``messages.absence_message(...)`` while a robot's belief is cleared, so the
+    server learns about absences too); in ``coordinator_step`` fuse
     the inbox with ``self.estimator`` (use ``COORDINATOR`` as its robot id) and return
     ``messages.belief_message(COORDINATOR, ...)`` payloads; in ``update_belief`` adopt
     the coordinator's belief messages.  If the server is down nothing arrives, so the
@@ -123,12 +158,23 @@ class DecentralizedConsensusStrategy(_SharedEstimatorBase):
     its graph neighbours each step (``messages.belief_message``).
     TODO (research team): the consensus update in ``update_belief`` -- use
     ``messages.for_target(neighbor_messages, target_id)``, ``messages.is_newer``
-    and the estimator's gating to decide between fusing and resetting."""
+    and the estimator's gating to decide between fusing and resetting, and
+    ``messages.belief_contradicted`` so a neighbour's stale belief about a spot I
+    found empty is ignored, and ``messages.for_target(..., messages.ABSENCE)`` so a
+    neighbour's "not there" clears my matching stale belief."""
     name = "decentralized"
 
     def get_messages_to_send(self, robot, comm, robots, t):
-        return [(None, belief_message(robot.id, target_id, belief, t))
-                for target_id, belief in robot.beliefs.items() if belief.valid and belief.cov is not None]
+        """Broadcast my belief about each target; if the no-sighting rule cleared
+        it, broadcast the empty check instead (a robot that knows "not there"
+        has nothing else to share)."""
+        out = []
+        for target_id, belief in robot.beliefs.items():
+            if belief.valid and belief.cov is not None:
+                out.append((None, belief_message(robot.id, target_id, belief, t)))
+            elif belief.absence_pos is not None:
+                out.append((None, absence_message(robot.id, target_id, belief, t)))
+        return out
 
 
 STRATEGIES = {

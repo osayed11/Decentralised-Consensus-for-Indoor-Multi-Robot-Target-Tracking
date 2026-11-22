@@ -23,6 +23,9 @@ class Belief:
     source: str = "none"            # free-form tag, e.g. "own_obs", "fused", "msg"
     last_seen: float = -np.inf      # time of the latest real observation behind this belief
     reset_count: int = 0            # relocation resets so far (local counter, diagnostics)
+    last_absence: float = -np.inf   # last time the believed spot was in view and found empty
+    absence_pos: Optional[np.ndarray] = None  # where the robot stood for that check (centre of the area seen empty)
+    absence_radius: float = 0.0     # radius of the area seen empty around absence_pos
 
     @property
     def valid(self) -> bool:

@@ -8,7 +8,8 @@ from sim.robot import Belief
 def test_belief_message_round_trip_and_filtering():
     b = Belief(mean=np.array([1.0, 2.0]), cov=np.eye(2), timestamp=3.0, last_seen=2.5, reset_count=4)
     msg = messages.belief_message(7, 0, b, 3.0)
-    assert set(msg) == {"type", "sender", "target_id", "t_sent", "mean", "cov", "last_seen", "reset_count"}
+    assert set(msg) == {"type", "sender", "target_id", "t_sent", "mean", "cov", "last_seen", "reset_count",
+                        "last_absence"}
     back = messages.message_to_belief(msg)
     np.testing.assert_allclose(back.mean, b.mean)
     assert back.last_seen == 2.5 and back.source == "msg"

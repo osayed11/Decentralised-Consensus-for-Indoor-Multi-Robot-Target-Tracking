@@ -19,12 +19,17 @@ The target is static between relocations, so the state is its 2D position.
                  being averaged with the old position.  Outliers before that are
                  not fused.
   With no prior belief the first observation initialises it (not a reset).
-
-``gate`` is a chi-square threshold with 2 degrees of freedom; for 2 dof the
-quantile has a closed form, ``chi2_threshold(p) = -2 ln(1 - p)`` (p = 0.99 -> 9.21).
-Sweeping ``gate`` trades false resets (noise taken for a relocation) against
-missed relocations (a real move averaged away).  Every gating decision is
-appended to ``Estimator.decisions`` so those rates can be measured.
+* no observation, but the believed position was in view (decision 3, the
+  no-sighting rule): the sensor never misses a target in range, so the target
+  is not where we thought.  Because the target teleports to a random spot, the
+  old position says nothing about the new one, so the belief is CLEARED (no
+  mean, no covariance) -- "I don't know where it is, except not here".  The
+  check itself is kept: ``last_absence`` (when), ``absence_pos`` and
+  ``absence_radius`` (the area seen empty).  A neighbour's belief that points
+  into that area and rests on an older sighting is contradicted
+  (``messages.contradicted_by_absence``), so a stale rumour cannot re-infect the
+  robot.  ``last_seen`` is not changed.  The next sighting starts a fresh belief
+  (not counted as a relocation reset).
 """
 from __future__ import annotations
 
@@ -61,6 +66,8 @@ class EstimatorConfig:
     gate: float = chi2_threshold(0.99)   # chi-square(2) threshold on d2  (sweep this)
     confirm: int = 1                     # consecutive outliers needed before a reset
     min_cov: float = 1e-6                # floor on the variances, for numerical safety
+    absence: bool = True                 # no-sighting rule on/off
+    absence_view_fraction: float = 0.8   # believed position must be within this share of sensor range
 
 
 @dataclass
@@ -72,11 +79,15 @@ class Estimator:
     decisions: List[GateDecision] = field(default_factory=list)
     _pending_outliers: Dict[Tuple[int, int], int] = field(default_factory=dict)
     _last_reset: Dict[Tuple[int, int], bool] = field(default_factory=dict)
+    absences: List[Tuple[float, int, int]] = field(default_factory=list)   # (t, robot_id, target_id)
+    _last_absence: Dict[Tuple[int, int], bool] = field(default_factory=dict)
 
     def reset_log(self) -> None:
         self.decisions.clear()
         self._pending_outliers.clear()
         self._last_reset.clear()
+        self.absences.clear()
+        self._last_absence.clear()
 
     # -- building blocks (pure functions of a Belief) ------------------------
     def predict(self, belief: Belief, t: float) -> Belief:
@@ -101,22 +112,40 @@ class Estimator:
         return replace(belief, mean=belief.mean + K @ nu, cov=cov, timestamp=t, last_seen=t, source="own_obs")
 
     # -- the full step every strategy calls ----------------------------------
+    @staticmethod
+    def apply_absence(belief: Belief, t: float, view_pos: np.ndarray, view_radius: float) -> Belief:
+        """The no-sighting rule on its own: forget the position, remember the
+        check (when, and the area seen empty)."""
+        return Belief(timestamp=t, source="absence", last_seen=belief.last_seen,
+                      reset_count=belief.reset_count, last_absence=t,
+                      absence_pos=np.array(view_pos, dtype=float), absence_radius=float(view_radius))
+
     def update(self, robot_id: int, target_id: int, belief: Belief, z: Optional[np.ndarray],
-               sensor_noise_std: float, t: float) -> Belief:
-        """Predict to time ``t`` and, if there is an observation, gate and update/reset.
+               sensor_noise_std: float, t: float, in_view: bool = False,
+               view_pos: Optional[np.ndarray] = None, view_radius: float = 0.0) -> Belief:
+        """Predict to time ``t``; with an observation, gate and update/reset;
+        without one, apply the no-sighting rule if the believed position was
+        ``in_view`` (the caller decides, see ``_SharedEstimatorBase.belief_in_view``);
+        ``view_pos`` / ``view_radius`` describe the area the robot saw empty.
 
         Call once per robot, target and step.  Afterwards ``relocation_detected``
-        tells whether this call reset the belief."""
+        / ``absence_detected`` tell whether this call reset the belief or found
+        the expected spot empty."""
         key = (robot_id, target_id)
         self._last_reset[key] = False
+        self._last_absence[key] = False
         belief = self.predict(belief, t)
         if z is None:
+            if in_view and self.config.absence and belief.valid:
+                belief = self.apply_absence(belief, t, view_pos, view_radius)
+                self._pending_outliers[key] = 0
+                self._last_absence[key] = True
+                self.absences.append((t, robot_id, target_id))
             return belief
         z = np.asarray(z, dtype=float)
         R = (sensor_noise_std ** 2) * np.eye(2)
         if not belief.valid or belief.cov is None:
-            return Belief(mean=z.copy(), cov=R.copy(), timestamp=t, source="own_obs", last_seen=t,
-                          reset_count=belief.reset_count)
+            return replace(belief, mean=z.copy(), cov=R.copy(), timestamp=t, source="own_obs", last_seen=t)
 
         _, _, d2 = self.innovation(belief, z, R)
         outlier = d2 > self.config.gate
@@ -126,8 +155,8 @@ class Estimator:
             if self._pending_outliers[key] >= self.config.confirm:
                 reset = True
                 self._pending_outliers[key] = 0
-                belief = Belief(mean=z.copy(), cov=R.copy(), timestamp=t, source="reset", last_seen=t,
-                                reset_count=belief.reset_count + 1)
+                belief = replace(belief, mean=z.copy(), cov=R.copy(), timestamp=t, source="reset", last_seen=t,
+                                 reset_count=belief.reset_count + 1)
             # an unconfirmed outlier is neither fused nor allowed to reset yet
         else:
             self._pending_outliers[key] = 0
@@ -139,3 +168,7 @@ class Estimator:
     def relocation_detected(self, robot_id: int, target_id: int) -> bool:
         """True if the latest ``update`` for this robot and target reset the belief."""
         return self._last_reset.get((robot_id, target_id), False)
+
+    def absence_detected(self, robot_id: int, target_id: int) -> bool:
+        """True if the latest ``update`` found the believed position empty."""
+        return self._last_absence.get((robot_id, target_id), False)

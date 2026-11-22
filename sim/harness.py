@@ -171,6 +171,7 @@ class Simulation:
         self.faults.sample([r.id for r in self.robots], self.fault_rng)
         self.strategy = strategy if strategy is not None else make_strategy(cfg.strategy, **cfg.strategy_kwargs)
         self.strategy.reset(self.robots, self.rng)
+        self.strategy.bind(self.env, cfg.use_line_of_sight)
         self.dispatcher = Dispatcher(self.env, success_radius=cfg.dispatch_success_radius, timeout=cfg.dispatch_timeout)
 
         # query schedule
@@ -210,6 +211,8 @@ class Simulation:
                 r.beliefs[tg.id] = b
                 if self.strategy.detect_relocation(r, tg.id, obs[tg.id], b):
                     self.events.append({"t": t, "event": "relocation_detected", "robot_id": r.id, "target_id": tg.id})
+                if self.strategy.detect_absence(r, tg.id):
+                    self.events.append({"t": t, "event": "absence_detected", "robot_id": r.id, "target_id": tg.id})
 
         # 5. messaging (stub)
         for r in self.robots:
@@ -333,6 +336,8 @@ class Simulation:
         out["bytes_sent"] = self.comm.bytes_sent()
         out["total_distance"] = float(sum(r.distance_travelled for r in self.robots))
         out["n_relocations"] = int(sum(len(tg.history) for tg in self.targets))
+        out["n_relocation_resets"] = n_ev("relocation_detected")
+        out["n_absence_detections"] = n_ev("absence_detected")
         disp = [r for r in self.dispatcher.results if r.success is not None]
         out["n_queries"] = len(disp)
         out["dispatch_success_rate"] = float(np.mean([r.success for r in disp])) if disp else np.nan

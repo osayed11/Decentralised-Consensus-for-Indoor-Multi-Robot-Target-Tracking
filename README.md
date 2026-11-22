@@ -79,6 +79,19 @@ robot's sensor noise also have their own streams, so the same seed gives the
 same failures for every strategy and a faulty run differs from its fault-free
 twin only by the failure itself. Example configs: `failures.yaml`, `server_failure.yaml`.
 
+## No-sighting rule (`sim/estimator.py`)
+
+The sensor never misses a target that is in range, so when a robot's believed
+position is well inside its view (80% of sensor range, and visible if
+line-of-sight sensing is on) and the target is not there, the shared estimator
+clears the belief: the target teleports to a random spot, so the old position
+says nothing about the new one. The robot keeps a record of the check (when, and
+the area it saw empty) so a neighbour's older belief pointing into that area is
+recognised as stale. Decentralised robots share the check as an `absence`
+message while they have no belief. A cleared robot is scored as guessing the
+building centre (see Metrics). Switch off with `strategy_kwargs: {absence: false}`.
+Trials report `n_absence_detections` next to `n_relocation_resets`.
+
 ## Metrics (accuracy and search efficiency, `sim/metrics.py`)
 
 Each alive robot's own belief is scored against the true target position.
