@@ -6,3 +6,4 @@ results/*
 *.mp4
 *.gif
 .venv/
+/audit/
