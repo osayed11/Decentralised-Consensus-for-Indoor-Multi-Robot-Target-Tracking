@@ -20,7 +20,7 @@ python demo.py --strategy decentralized --duration 60   # comm edges + message c
 | Shared estimator | `sim/estimator.py` | **done**: Kalman filter, innovation gating, belief reset, gating log |
 | Strategies use it | `sim/strategies.py` | **done** for the shared part; `independent` is complete |
 | Decentralized consensus update | `sim/strategies.py` | **TODO**: messages are already broadcast every step, but not yet fused |
-| Centralized fusion at the hub | `sim/strategies.py` | **TODO** |
+| Centralized fusion at the hub | `sim/strategies.py` | **implemented**: raw observations to the off-board coordinator, fused beliefs returned via infrastructure links |
 | Gating metrics (false resets / missed relocations) | harness | **TODO** (being built in parallel); the data it needs is logged, see 5.3 |
 | Dispatch selection | `sim/dispatch.py` | unchanged (still the true-distance stub) |
 | Independent exploration and tracking (separate development branch) | `sim/exploration.py`, `sim/tracking.py`, `sim/harness.py` | **implemented in independent MVP**, not automatically merged into `shared-comms-estimator`; see §10 |
@@ -69,6 +69,12 @@ Every payload: `type`, `sender`, `target_id`, `t_sent`.
   before the move must not pull my fresh belief back. `reset_count` is per robot, so it is **not**
   comparable across robots.
 * `message_to_belief(msg)` turns a received `belief` message into a `Belief`.
+* IMM belief messages also include `velocity`, `p_moving` and the complete `imm`
+  posterior (mode states, covariances, probabilities and blended-output cache).
+  These are copied on encoding and decoding so centralized clients can predict
+  the server estimate between replies without sharing mutable filter state or
+  fusing the same observations again. Older position-only messages remain valid.
+  Communication byte estimates include nested IMM arrays.
 
 ## 5. Shared estimator (`sim/estimator.py`)
 
@@ -317,8 +323,33 @@ The demo labels robot navigation modes and hides **unused radio graph lines** un
 - **Use identical sensing, A*, motion, safety and exploration/tracking policies across all three strategies** when comparing information sharing. The MVP follower currently applies to the independent method only; do not interpret results as an information-sharing comparison until the common navigation layer is integrated across strategies.
 - **Paired trial world versus behaviour:** matched seeds and dedicated RNG streams help preserve exogenous relocation/sensing randomness, but robots may physically take different routes after one strategy receives new information. That is an intended behavioural effect, not necessarily a broken pairing.
 - **Metrics caveat:** existing `error_eval` substitutes the building centre when a robot has no belief. Report estimates conditional on `has_belief` separately from whole-team penalty metrics, and distinguish first *physical detection* from all-robot localisation accuracy.
-- **Still open:** decentralised consensus fusion; centralised coordinator fusion; false-reset/missed-relocation metrics; removing the true-distance dispatch stub; coverage-aware goal selection; formal deadlock-free multi-robot traffic management. The latter two are optional improvements, not requirements for the minimal independent baseline.
+- **Still open:** decentralised consensus fusion; false-reset/missed-relocation metrics; removing the true-distance dispatch stub; coverage-aware goal selection; formal deadlock-free multi-robot traffic management. The latter two are optional improvements, not requirements for the minimal independent baseline.
 
 ### 10.9 Additional development notes
 
 For more detail in the independent MVP snapshot, see `EXPLORATION_PHASES_1_2.md`, `LOCAL_ROBOT_AVOIDANCE.md` and `INDEPENDENT_TRACKING_MVP.md`.
+
+## Centralized implementation
+
+Run `python demo.py --strategy centralized --paths`.
+
+Decision D6 is implemented: every robot, including robot 0, sends raw
+observations to the off-board `COORDINATOR` (-1). Radio range does not restrict
+these infrastructure links; packet loss applies in both directions. The server
+processes the current step's inbox and replies arrive at robots next step.
+
+Measurements are processed in observation-time order, once per sender/target/time.
+Older measurements do not rewind the filter. The server preserves measurement
+freshness and uses the shared Kalman estimator and relocation gate. Its internal
+state stays at evidence time; outgoing covariance is predicted to current time.
+
+Robots maintain independent local filters and cache server estimates, preferring
+the server when its observation time is at least as recent. Server estimates are
+never fused back into local filters. Local no-sighting checks and server absence
+messages clear matching stale estimates; fresh sightings elsewhere remain valid.
+Absences are forwarded to and redistributed by the coordinator.
+
+During server downtime, local estimation continues and cached uncertainty grows.
+On recovery, new observations resume fusion; there is no retransmission queue.
+Server resets appear in the estimator decision log under robot ID -1; the
+harness's per-robot relocation events describe local resets only.

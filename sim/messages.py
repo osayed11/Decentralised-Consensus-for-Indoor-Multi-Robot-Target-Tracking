@@ -6,6 +6,7 @@ payload has ``type``, ``sender``, ``target_id`` and ``t_sent``.
 ``belief``       a robot's current estimate.  Decentralized: sent to neighbours
                  every step.  Centralized: the hub sends the fused estimate back.
     mean (2,), cov (2, 2), last_seen, reset_count, last_absence
+    Optional IMM fields: velocity, p_moving, imm (complete mode posterior).
 ``observation``  a raw measurement.  Centralized: robots send these to the hub.
     z (2,), noise_std, t_obs
 ``absence``      "I looked where the target should be and it was not there"
@@ -23,6 +24,7 @@ between robots.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Iterable, List
 
 import numpy as np
@@ -35,10 +37,16 @@ ABSENCE = "absence"
 
 
 def belief_message(sender_id: int, target_id: int, belief: Belief, t: float) -> dict:
-    return {"type": BELIEF, "sender": sender_id, "target_id": target_id, "t_sent": t,
+    msg = {"type": BELIEF, "sender": sender_id, "target_id": target_id, "t_sent": t,
             "mean": np.array(belief.mean, dtype=float), "cov": np.array(belief.cov, dtype=float),
             "last_seen": float(belief.last_seen), "reset_count": int(belief.reset_count),
             "last_absence": float(belief.last_absence)}
+    # Preserve the full posterior so clients can predict between server replies.
+    # Copies prevent a receiver from mutating the server's filter state.
+    if belief.imm is not None:
+        msg.update(imm=deepcopy(belief.imm),
+                   velocity=deepcopy(belief.velocity), p_moving=float(belief.p_moving))
+    return msg
 
 
 def observation_message(sender_id: int, target_id: int, z: np.ndarray, noise_std: float, t: float) -> dict:
@@ -63,7 +71,9 @@ def message_to_belief(msg: dict) -> Belief:
     """A received belief message as a Belief (source='msg')."""
     return Belief(mean=np.array(msg["mean"], dtype=float), cov=np.array(msg["cov"], dtype=float),
                   timestamp=msg["t_sent"], source="msg", last_seen=msg["last_seen"],
-                  reset_count=msg["reset_count"], last_absence=msg.get("last_absence", -np.inf))
+                  reset_count=msg["reset_count"], last_absence=msg.get("last_absence", -np.inf),
+                  velocity=deepcopy(msg.get("velocity")),
+                  p_moving=msg.get("p_moving", float("nan")), imm=deepcopy(msg.get("imm")))
 
 
 def is_newer(msg: dict, belief: Belief) -> bool:

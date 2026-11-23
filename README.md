@@ -2,8 +2,8 @@
 
 2D simulation of N robots searching for and tracking K relocating targets in an
 indoor floor plan.  Built to the spec in `simulation-spec.md`.  The simulation
-infrastructure is complete; the multi-agent-systems logic is **stubbed** and is
-the research team's contribution.
+infrastructure, independent estimation, and centralized fusion are implemented.
+Decentralized consensus and belief-based dispatch selection remain unfinished.
 
 ## What is complete vs. stubbed
 
@@ -18,7 +18,7 @@ the research team's contribution.
 | `sim/harness.py` | complete | `SimConfig` (YAML/JSON/dataclass), `Simulation` step loop, `run_trials`, `run_sweep`, CSV logs, mean/std/95% CI aggregation |
 | `sim/estimator.py`, `sim/messages.py` | complete | shared resting/carried (IMM) filter, or the single static Kalman filter, with innovation gating and belief reset; agreed message formats |
 | `sim/visualize.py` | complete | 2D view (robots, sensor circles, true target, beliefs + covariance ellipses, comm edges), animation / frame export, result plots |
-| **`sim/strategies.py`** | **partly done** | All three strategies run the shared estimator (`sim/estimator.py`); `independent` is complete. **TODO**: centralized fusion at the hub, decentralized consensus update (messages are already broadcast). See `SHARED_COMPONENTS.md` |
+| **`sim/strategies.py`** | **partly done** | All three strategies run the shared estimator (`sim/estimator.py`); `independent` and `centralized` are implemented. **TODO**: decentralized consensus update (messages are already broadcast). See `SHARED_COMPONENTS.md` |
 | `sim/comms.py` | complete | range-based graph, packet loss (own random stream), delivery to `robot.inbox`, per-message log and cost metrics. See `SHARED_COMPONENTS.md` |
 | **`sim/dispatch.py::select_robot_for_dispatch`** | **STUB** | Placeholder: nearest alive robot by *true* distance (cheats on purpose so the pipeline runs) |
 
@@ -47,9 +47,9 @@ python run_experiments.py --config sim/configs/default.yaml --sweep strategy ind
 
 1. apply scheduled robot failures
 2. targets relocate if due (unless paused by a dispatch)
-3. `comm.build_graph(robots, t)` **(stub)**
-4. each robot senses; `strategy.update_belief(...)` and `strategy.detect_relocation(...)` **(stub)**; inbox is cleared
-5. `strategy.get_messages_to_send(...)` → `comm.send_message` / `comm.broadcast` **(stub)**; delivered messages land in `robot.inbox` for the next step
+3. `comm.build_graph(robots, t)`
+4. each robot senses; `strategy.update_belief(...)` and `strategy.detect_relocation(...)`; inbox is cleared
+5. `strategy.get_messages_to_send(...)` → `comm.send_message` / `comm.broadcast`; delivered messages land in `robot.inbox` for the next step
 6. scheduled queries → `Dispatcher.query_target` → `select_robot_for_dispatch` **(stub)**
 7. active dispatches advance (success if within `dispatch_success_radius` of the true target; failure on arrival-without-target, timeout, or robot failure)
 8. idle robots patrol to random free goals via A*; all robots step kinematics
